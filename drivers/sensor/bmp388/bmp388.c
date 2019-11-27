@@ -363,15 +363,6 @@ static int bmp388_chip_init(struct device *dev)
 		}
 		if (rslt == BMP3_SENSOR_OK) {
 			rslt = analyze_sensor_data(&data_sens);
-
-			/* Set the power mode to sleep mode */
-//    	  if (rslt == BMP3_SENSOR_OK)
-//    	  {
-
-//    	     t_dev.settings.op_mode = BMP3_SLEEP_MODE;
-//    	     rslt = bmp3_set_op_mode(&t_dev);
-
-//    	  }
 		}
 	}
 	return 0;
