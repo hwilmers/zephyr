@@ -1,6 +1,7 @@
 /*
  * Copyright (c) 2016, 2017 Intel Corporation
  * Copyright (c) 2017 IpTronix S.r.l.
+ * Copyright (c) 2019 Wilmers Messtechnik
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -31,8 +32,9 @@ struct bmp388_data {
 #else
 #error "BMP388 device type not specified"
 #endif
-	/* Compensated values. */
-	struct bmp3_data val;
+
+  /* Compensated values. */
+  struct bmp3_data val;
 
 };
 

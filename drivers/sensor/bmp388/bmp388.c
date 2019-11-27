@@ -1,8 +1,9 @@
-/* bmp280.c - Driver for Bosch BMP280 temperature and pressure sensor */
+/* bmp388.c - Driver for Bosch BMP388 temperature and pressure sensor */
 
 /*
  * Copyright (c) 2016, 2017 Intel Corporation
  * Copyright (c) 2017 IpTronix S.r.l.
+ * Copyright (c) 2019 Wilmers Messtechnik
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -200,18 +201,13 @@ static int bmp388_reg_write(struct bmp388_data *data, u8_t reg, u8_t val)
 	return 0;
 }
 
-int bmp388_sample_fetch(struct device *dev, enum sensor_channel chan)
+static int bmp388_sample_fetch(struct device *dev, enum sensor_channel chan)
 {
 	struct bmp388_data *data = dev->driver_data;
 
     int8_t rslt;
     struct bmp3_data data_sens = { 0 };
     uint8_t sensor_comp;
-    /* Variable used to select the sensor component */
-//    uint8_t sensor_comp;
-
-    /* Variable used to store the compensated data */
-//    struct bmp3_data data_compensated = { 0 };
 
     /* Used to select the settings user needs to change */
     uint16_t settings_sel;
@@ -222,12 +218,13 @@ int bmp388_sample_fetch(struct device *dev, enum sensor_channel chan)
     t_dev.write = &bosch_write;
     t_dev.intf = BMP3_I2C_INTF;
     t_dev.delay_ms = &bmp_delay_ms;
-    // resetting of the sensor
 
+    /* resetting of the sensor */
     rslt = bmp3_soft_reset(&t_dev);
     if (rslt != BMP3_SENSOR_OK)
     	LOG_DBG("BMP388 Soft Reset Failed");
-    // initializing Bosch Driver Code
+
+    /* initializing Bosch Driver Code */
     rslt = bmp3_init(&t_dev);
 
     if (rslt == BMP3_E_COMM_FAIL || rslt == BMP3_E_DEV_NOT_FOUND)
@@ -245,12 +242,12 @@ int bmp388_sample_fetch(struct device *dev, enum sensor_channel chan)
     	t_dev.settings.press_en = BMP3_ENABLE;
     	t_dev.settings.temp_en = BMP3_ENABLE;
 
-    	// Select the output data rate and over sampling settings for pressure and temperature //
+    	/* Select the output data rate and over sampling settings for pressure and temperature */
     	t_dev.settings.odr_filter.press_os = BMP3_OVERSAMPLING_32X;
-    	t_dev.settings.odr_filter.temp_os = BMP3_OVERSAMPLING_2X;//BMP3_NO_OVERSAMPLING;
+    	t_dev.settings.odr_filter.temp_os = BMP3_OVERSAMPLING_2X;
     	t_dev.settings.odr_filter.odr = BMP3_ODR_25_HZ;
 
-    	// Assign the settings which needs to be set in the sensor //
+    	/* Assign the settings which needs to be set in the sensor */
     	settings_sel = BMP3_PRESS_EN_SEL | BMP3_TEMP_EN_SEL | BMP3_PRESS_OS_SEL | BMP3_TEMP_OS_SEL | BMP3_ODR_SEL;
     	rslt = bmp3_set_sensor_settings(settings_sel, &t_dev);
 
@@ -262,7 +259,7 @@ int bmp388_sample_fetch(struct device *dev, enum sensor_channel chan)
     	   {
     	      t_dev.delay_ms(100);
               sensor_comp = BMP3_PRESS | BMP3_TEMP;
-              // Temperature and Pressure data are read and stored in the bmp3_data instance //
+              /* Temperature and Pressure data are read and stored in the bmp3_data instance */
               rslt = bmp3_get_sensor_data(sensor_comp, &data_sens, &t_dev);
 
     	   }
@@ -270,38 +267,10 @@ int bmp388_sample_fetch(struct device *dev, enum sensor_channel chan)
 
     	if (rslt == BMP3_SENSOR_OK)
     	{
- //   	  rslt = analyze_sensor_data(&data_sens);
-
-    	                // Set the power mode to sleep mode //
-//    	  if (rslt == BMP3_SENSOR_OK)
-//    	  {
-
     	   t_dev.settings.op_mode = BMP3_SLEEP_MODE;
     	   rslt = bmp3_set_op_mode(&t_dev);
-
-//    	  }
        }
     }
-
-
-/*
-	struct bmp3_data data_comp = { 0 , 0 };
-//	int rslt;
-	struct bmp3_dev t_dev;
-
-    t_dev.chip_id = BMP3_CHIP_ID;
-    t_dev.read = &bosch_read;
-    t_dev.write = &bosch_write;
-    t_dev.intf = BMP3_I2C_INTF;
-    t_dev.delay_ms = &bmp_delay_ms;
-
-	__ASSERT_NO_MSG(chan == SENSOR_CHAN_ALL);
-    // Sensor component selection //
-    sensor_comp = BMP3_PRESS | BMP3_TEMP;
-
-    // Temperature and Pressure data are read and stored in the bmp3_data instance //
-    rslt = bmp3_get_sensor_data(sensor_comp, &data_comp, &t_dev);
-*/
 
     data->val  = data_sens;
 	return 0;
@@ -350,11 +319,6 @@ static int bmp388_chip_init(struct device *dev)
     uint8_t rslt;
     struct bmp3_data data_sens = { 0 };
     uint8_t sensor_comp;
-    /* Variable used to select the sensor component */
-//    uint8_t sensor_comp;
-
-    /* Variable used to store the compensated data */
-//    struct bmp3_data data_compensated = { 0 };
 
     /* Used to select the settings user needs to change */
     uint16_t settings_sel;
@@ -365,11 +329,13 @@ static int bmp388_chip_init(struct device *dev)
     t_dev.write = &bosch_write;
     t_dev.intf = BMP3_I2C_INTF;
     t_dev.delay_ms = &bmp_delay_ms;
-    // resetting of the sensor
+
+    /* resetting of the sensor */
     rslt = bmp3_soft_reset(&t_dev);
     if (rslt != BMP3_SENSOR_OK)
     	LOG_DBG("BMP388 Soft Reset Failed");
-    // initializing Bosch Driver Code
+    
+    /* initializing Bosch Driver Code */
     rslt = bmp3_init(&t_dev);
 
     if (rslt == BMP3_E_COMM_FAIL || rslt == BMP3_E_DEV_NOT_FOUND)
@@ -387,9 +353,9 @@ static int bmp388_chip_init(struct device *dev)
     	t_dev.settings.press_en = BMP3_ENABLE;
     	t_dev.settings.temp_en = BMP3_ENABLE;
 
-    	/* Select the output data rate and over sampling settings for pressure and temperature */
-    	t_dev.settings.odr_filter.press_os = BMP3_NO_OVERSAMPLING;
-    	t_dev.settings.odr_filter.temp_os = BMP3_NO_OVERSAMPLING;//BMP3_NO_OVERSAMPLING;
+	/* Select the output data rate and over sampling settings for pressure and temperature */
+    	t_dev.settings.odr_filter.press_os = BMP3_OVERSAMPLING_32X;
+    	t_dev.settings.odr_filter.temp_os = BMP3_OVERSAMPLING_2X;
     	t_dev.settings.odr_filter.odr = BMP3_ODR_25_HZ;
 
     	/* Assign the settings which needs to be set in the sensor */
@@ -398,7 +364,7 @@ static int bmp388_chip_init(struct device *dev)
 
     	if (rslt == BMP3_SENSOR_OK)
     	{
-    	   t_dev.settings.op_mode = BMP3_NORMAL_MODE;
+	  t_dev.settings.op_mode = BMP3_FORCED_MODE;
     	   rslt = bmp3_set_op_mode(&t_dev);
     	   if (rslt == BMP3_SENSOR_OK)
     	   {
