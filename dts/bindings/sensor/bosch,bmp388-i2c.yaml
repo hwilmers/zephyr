@@ -1,0 +1,11 @@
+# Copyright (c) 2019, Wilmers Messtechnik
+# SPDX-License-Identifier: Apache-2.0
+
+title: BMP388 Integrated environmental sensor
+
+description: >
+    This is a representation of the BMP388 Integrated environmental sensor
+
+compatible: "bosch,bmp388"
+
+include: i2c-device.yaml

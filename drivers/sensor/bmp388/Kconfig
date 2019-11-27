@@ -1,0 +1,99 @@
+# Kconfig.bmp280 - BMP280 temperature and pressure sensor configuration options
+
+#
+# Copyright (c) 2016 Intel Corporation
+# Copyright (c) 2017 IpTronix S.r.l.
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+menuconfig BMP388
+	bool "BMP388 sensor"
+	depends on I2C || SPI
+	default	n
+	help
+	 Enable driver for BMP388 I2C-based or SPI-based temperature and pressure sensor.
+
+if BMP388
+
+menu "Attributes"
+
+choice
+	prompt "BMP388 temperature oversampling"
+	default BMP388_TEMP_OVER_2X
+	help
+	  Select temperature oversampling for the BMP388 sensor.  Higher values
+	  lead to more accurate readings, but higher power consumption.
+config BMP388_TEMP_OVER_1X
+	bool "x1"
+config BMP388_TEMP_OVER_2X
+	bool "x2"
+config BMP388_TEMP_OVER_4X
+	bool "x4"
+config BMP388_TEMP_OVER_8X
+	bool "x8"
+config BMP388_TEMP_OVER_16X
+	bool "x16"
+endchoice
+
+choice
+	prompt "BMP388 pressure oversampling"
+	default BMP388_PRESS_OVER_16X
+	help
+	  Select pressure oversampling for the BMP388 sensor.  Higher values
+	  lead to more accurate readings, but higher power consumption.
+config BMP388_PRESS_OVER_1X
+	bool "x1"
+config BMP388_PRESS_OVER_2X
+	bool "x2"
+config BMP388_PRESS_OVER_4X
+	bool "x4"
+config BMP388_PRESS_OVER_8X
+	bool "x8"
+config BMP388_PRESS_OVER_16X
+	bool "x16"
+endchoice
+
+choice
+	prompt "BMP388 standby time"
+	default BMP388_STANDBY_1000MS
+	help
+	  Select standby time between measurements for the BMP388 sensor.
+	  Higher values lead to lower power consumption.
+config BMP388_STANDBY_05MS
+	bool "0.5ms"
+config BMP388_STANDBY_62MS
+	bool "62.5ms"
+config BMP388_STANDBY_125MS
+	bool "125ms"
+config BMP388_STANDBY_250MS
+	bool "250ms"
+config BMP388_STANDBY_500MS
+	bool "500ms"
+config BMP388_STANDBY_1000MS
+	bool "1000ms"
+config BMP388_STANDBY_2000MS
+	bool "2000ms BMP280 / 10ms BMP388"
+config BMP388_STANDBY_4000MS
+	bool "4000ms BMP280 / 20ms BMP388"
+endchoice
+
+choice
+	prompt "BMP388 filter coefficient"
+	default BMP388_FILTER_4
+	help
+	  Select the filter coefficient for the BMP388 sensor.
+config BMP388_FILTER_OFF
+	bool "filter off"
+config BMP388_FILTER_2
+	bool "2"
+config BMP388_FILTER_4
+	bool "4"
+config BMP388_FILTER_8
+	bool "8"
+config BMP388_FILTER_16
+	bool "16"
+endchoice
+
+endmenu
+
+endif # BMP388

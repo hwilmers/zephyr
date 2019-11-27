@@ -50,6 +50,8 @@ source "drivers/sensor/bmi160/Kconfig"
 
 source "drivers/sensor/bmm150/Kconfig"
 
+source "drivers/sensor/bmp388/Kconfig"
+
 source "drivers/sensor/ccs811/Kconfig"
 
 source "drivers/sensor/dht/Kconfig"
