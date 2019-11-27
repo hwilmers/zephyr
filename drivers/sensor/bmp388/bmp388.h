@@ -33,8 +33,8 @@ struct bmp388_data {
 #error "BMP388 device type not specified"
 #endif
 
-  /* Compensated values. */
-  struct bmp3_data val;
+	/* Compensated values. */
+	struct bmp3_data val;
 
 };
 

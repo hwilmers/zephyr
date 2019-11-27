@@ -36,54 +36,47 @@ LOG_MODULE_REGISTER(BMP388, CONFIG_SENSOR_LOG_LEVEL);
  * */
 static int8_t cal_crc(uint8_t seed, uint8_t data)
 {
-    int8_t poly = 0x1D;
-    int8_t var2;
-    uint8_t i;
+	int8_t poly = 0x1D;
+	int8_t var2;
+	uint8_t i;
 
-    for (i = 0; i < 8; i++)
-    {
-        if ((seed & 0x80) ^ (data & 0x80))
-        {
-            var2 = 1;
-        }
-        else
-        {
-            var2 = 0;
-        }
-        seed = (seed & 0x7F) << 1;
-        data = (data & 0x7F) << 1;
-        seed = seed ^ (uint8_t)(poly * var2);
-    }
+	for (i = 0; i < 8; i++) {
+		if ((seed & 0x80) ^ (data & 0x80)) {
+			var2 = 1;
+		} else   {
+			var2 = 0;
+		}
+		seed = (seed & 0x7F) << 1;
+		data = (data & 0x7F) << 1;
+		seed = seed ^ (uint8_t)(poly * var2);
+	}
 
-    return (int8_t)seed;
+	return (int8_t)seed;
 }
 
 
 static int8_t validate_trimming_param(const struct bmp3_dev *dev)
 {
-    int8_t rslt;
-    uint8_t crc = 0xFF;
-    uint8_t stored_crc;
-    uint8_t trim_param[21];
-    uint8_t i;
+	int8_t rslt;
+	uint8_t crc = 0xFF;
+	uint8_t stored_crc;
+	uint8_t trim_param[21];
+	uint8_t i;
 
-    rslt = bmp3_get_regs(BMP3_CALIB_DATA_ADDR, trim_param, 21, dev);
-    if (rslt == BMP3_SENSOR_OK)
-    {
-        for (i = 0; i < 21; i++)
-        {
-            crc = (uint8_t)cal_crc(crc, trim_param[i]);
-        }
-        crc = (crc ^ 0xFF);
-        rslt = bmp3_get_regs(0x30, &stored_crc, 1, dev);
-        if (stored_crc != crc)
-        {
-            rslt = BMP3_TRIMMING_DATA_OUT_OF_BOUND;
-        }
+	rslt = bmp3_get_regs(BMP3_CALIB_DATA_ADDR, trim_param, 21, dev);
+	if (rslt == BMP3_SENSOR_OK) {
+		for (i = 0; i < 21; i++) {
+			crc = (uint8_t)cal_crc(crc, trim_param[i]);
+		}
+		crc = (crc ^ 0xFF);
+		rslt = bmp3_get_regs(0x30, &stored_crc, 1, dev);
+		if (stored_crc != crc) {
+			rslt = BMP3_TRIMMING_DATA_OUT_OF_BOUND;
+		}
 
-    }
+	}
 
-    return rslt;
+	return rslt;
 
 }
 
@@ -92,27 +85,27 @@ static int8_t validate_trimming_param(const struct bmp3_dev *dev)
  */
 static int8_t analyze_sensor_data(const struct bmp3_data *sens_data)
 {
-    int8_t rslt = BMP3_SENSOR_OK;
+	int8_t rslt = BMP3_SENSOR_OK;
 
-    if ((sens_data->temperature < 0) || (sens_data->temperature > 4000))
-    {
-        rslt = BMP3_IMPLAUSIBLE_TEMPERATURE;
-    }
-    if (rslt == BMP3_SENSOR_OK)
-    {
-        if ((sens_data->pressure / 100 < 90000) || (sens_data->pressure / 100 > 110000))
-        {
-            rslt = BMP3_IMPLAUSIBLE_PRESSURE;
-        }
-    }
+	if ((sens_data->temperature < 0) || (sens_data->temperature > 4000)) {
+		rslt = BMP3_IMPLAUSIBLE_TEMPERATURE;
+	}
+	if (rslt == BMP3_SENSOR_OK) {
+		if ((sens_data->pressure / 100 < 90000) || (sens_data->pressure / 100 > 110000)) {
+			rslt = BMP3_IMPLAUSIBLE_PRESSURE;
+		}
+	}
 
-    return rslt;
+	return rslt;
 }
-void bmp_delay_ms(uint32_t period){
+void bmp_delay_ms(uint32_t period)
+{
 	k_sleep(K_MSEC(period));
 }
-int8_t bosch_read(uint8_t dev_id, uint8_t reg_addr, uint8_t *data, uint16_t len){
+int8_t bosch_read(uint8_t dev_id, uint8_t reg_addr, uint8_t *data, uint16_t len)
+{
 	int result = bmp388_reg_read(bmp388_global, reg_addr, data, (int) len);
+
 	return result;
 }
 
@@ -127,8 +120,10 @@ int8_t bosch_read(uint8_t dev_id, uint8_t reg_addr, uint8_t *data, uint16_t len)
  * @retval zero -> Success / -ve value -> Error.
  */
 
-int8_t bosch_write(uint8_t dev_id, uint8_t reg_addr, uint8_t *data, uint16_t len){
+int8_t bosch_write(uint8_t dev_id, uint8_t reg_addr, uint8_t *data, uint16_t len)
+{
 	int result =  bmp388_reg_write(bmp388_global, reg_addr, *data);
+
 	return result;
 }
 
@@ -205,74 +200,69 @@ static int bmp388_sample_fetch(struct device *dev, enum sensor_channel chan)
 {
 	struct bmp388_data *data = dev->driver_data;
 
-    int8_t rslt;
-    struct bmp3_data data_sens = { 0 };
-    uint8_t sensor_comp;
+	int8_t rslt;
+	struct bmp3_data data_sens = { 0 };
+	uint8_t sensor_comp;
 
-    /* Used to select the settings user needs to change */
-    uint16_t settings_sel;
-    struct bmp3_dev t_dev;
+	/* Used to select the settings user needs to change */
+	uint16_t settings_sel;
+	struct bmp3_dev t_dev;
 
-    t_dev.chip_id = BMP3_CHIP_ID;
-    t_dev.read = &bosch_read;
-    t_dev.write = &bosch_write;
-    t_dev.intf = BMP3_I2C_INTF;
-    t_dev.delay_ms = &bmp_delay_ms;
+	t_dev.chip_id = BMP3_CHIP_ID;
+	t_dev.read = &bosch_read;
+	t_dev.write = &bosch_write;
+	t_dev.intf = BMP3_I2C_INTF;
+	t_dev.delay_ms = &bmp_delay_ms;
 
-    /* resetting of the sensor */
-    rslt = bmp3_soft_reset(&t_dev);
-    if (rslt != BMP3_SENSOR_OK)
-    	LOG_DBG("BMP388 Soft Reset Failed");
+	/* resetting of the sensor */
+	rslt = bmp3_soft_reset(&t_dev);
+	if (rslt != BMP3_SENSOR_OK) {
+		LOG_DBG("BMP388 Soft Reset Failed");
+	}
 
-    /* initializing Bosch Driver Code */
-    rslt = bmp3_init(&t_dev);
+	/* initializing Bosch Driver Code */
+	rslt = bmp3_init(&t_dev);
 
-    if (rslt == BMP3_E_COMM_FAIL || rslt == BMP3_E_DEV_NOT_FOUND)
-    {
-        rslt = BMP3_COMMUNICATION_ERROR_OR_WRONG_DEVICE;
-    }
+	if (rslt == BMP3_E_COMM_FAIL || rslt == BMP3_E_DEV_NOT_FOUND) {
+		rslt = BMP3_COMMUNICATION_ERROR_OR_WRONG_DEVICE;
+	}
 
-    if (rslt == BMP3_SENSOR_OK)
+	if (rslt == BMP3_SENSOR_OK) {
+		rslt = validate_trimming_param(&t_dev);
+	}
 
-    {
-        rslt = validate_trimming_param(&t_dev);
-    }
+	if (rslt == BMP3_SENSOR_OK) {
+		t_dev.settings.press_en = BMP3_ENABLE;
+		t_dev.settings.temp_en = BMP3_ENABLE;
 
-    if (rslt == BMP3_SENSOR_OK){
-    	t_dev.settings.press_en = BMP3_ENABLE;
-    	t_dev.settings.temp_en = BMP3_ENABLE;
+		/* Select the output data rate and over sampling settings for pressure and temperature */
+		t_dev.settings.odr_filter.press_os = BMP3_OVERSAMPLING_32X;
+		t_dev.settings.odr_filter.temp_os = BMP3_OVERSAMPLING_2X;
+		t_dev.settings.odr_filter.odr = BMP3_ODR_25_HZ;
 
-    	/* Select the output data rate and over sampling settings for pressure and temperature */
-    	t_dev.settings.odr_filter.press_os = BMP3_OVERSAMPLING_32X;
-    	t_dev.settings.odr_filter.temp_os = BMP3_OVERSAMPLING_2X;
-    	t_dev.settings.odr_filter.odr = BMP3_ODR_25_HZ;
+		/* Assign the settings which needs to be set in the sensor */
+		settings_sel = BMP3_PRESS_EN_SEL | BMP3_TEMP_EN_SEL | BMP3_PRESS_OS_SEL | BMP3_TEMP_OS_SEL | BMP3_ODR_SEL;
+		rslt = bmp3_set_sensor_settings(settings_sel, &t_dev);
 
-    	/* Assign the settings which needs to be set in the sensor */
-    	settings_sel = BMP3_PRESS_EN_SEL | BMP3_TEMP_EN_SEL | BMP3_PRESS_OS_SEL | BMP3_TEMP_OS_SEL | BMP3_ODR_SEL;
-    	rslt = bmp3_set_sensor_settings(settings_sel, &t_dev);
+		if (rslt == BMP3_SENSOR_OK) {
+			t_dev.settings.op_mode = BMP3_FORCED_MODE;
+			rslt = bmp3_set_op_mode(&t_dev);
+			if (rslt == BMP3_SENSOR_OK) {
+				t_dev.delay_ms(100);
+				sensor_comp = BMP3_PRESS | BMP3_TEMP;
+				/* Temperature and Pressure data are read and stored in the bmp3_data instance */
+				rslt = bmp3_get_sensor_data(sensor_comp, &data_sens, &t_dev);
 
-    	if (rslt == BMP3_SENSOR_OK)
-    	{
-	  t_dev.settings.op_mode = BMP3_FORCED_MODE;
-    	   rslt = bmp3_set_op_mode(&t_dev);
-    	   if (rslt == BMP3_SENSOR_OK)
-    	   {
-    	      t_dev.delay_ms(100);
-              sensor_comp = BMP3_PRESS | BMP3_TEMP;
-              /* Temperature and Pressure data are read and stored in the bmp3_data instance */
-              rslt = bmp3_get_sensor_data(sensor_comp, &data_sens, &t_dev);
+			}
+		}
 
-    	   }
-    	}
+		if (rslt == BMP3_SENSOR_OK) {
+			t_dev.settings.op_mode = BMP3_SLEEP_MODE;
+			rslt = bmp3_set_op_mode(&t_dev);
+		}
+	}
 
-    	if (rslt == BMP3_SENSOR_OK)
-    	{
-    	   t_dev.settings.op_mode = BMP3_SLEEP_MODE;
-    	   rslt = bmp3_set_op_mode(&t_dev);
-       }
-    }
-
-    data->val  = data_sens;
+	data->val = data_sens;
 	return 0;
 }
 
@@ -316,70 +306,65 @@ static const struct sensor_driver_api bmp388_api_funcs = {
 static int bmp388_chip_init(struct device *dev)
 {
 	struct bmp388_data *data =  dev->driver_data;
-    uint8_t rslt;
-    struct bmp3_data data_sens = { 0 };
-    uint8_t sensor_comp;
+	uint8_t rslt;
+	struct bmp3_data data_sens = { 0 };
+	uint8_t sensor_comp;
 
-    /* Used to select the settings user needs to change */
-    uint16_t settings_sel;
-    struct bmp3_dev t_dev;
+	/* Used to select the settings user needs to change */
+	uint16_t settings_sel;
+	struct bmp3_dev t_dev;
 
-    t_dev.chip_id = BMP3_CHIP_ID;
-    t_dev.read = &bosch_read;
-    t_dev.write = &bosch_write;
-    t_dev.intf = BMP3_I2C_INTF;
-    t_dev.delay_ms = &bmp_delay_ms;
+	t_dev.chip_id = BMP3_CHIP_ID;
+	t_dev.read = &bosch_read;
+	t_dev.write = &bosch_write;
+	t_dev.intf = BMP3_I2C_INTF;
+	t_dev.delay_ms = &bmp_delay_ms;
 
-    /* resetting of the sensor */
-    rslt = bmp3_soft_reset(&t_dev);
-    if (rslt != BMP3_SENSOR_OK)
-    	LOG_DBG("BMP388 Soft Reset Failed");
-    
-    /* initializing Bosch Driver Code */
-    rslt = bmp3_init(&t_dev);
+	/* resetting of the sensor */
+	rslt = bmp3_soft_reset(&t_dev);
+	if (rslt != BMP3_SENSOR_OK) {
+		LOG_DBG("BMP388 Soft Reset Failed");
+	}
 
-    if (rslt == BMP3_E_COMM_FAIL || rslt == BMP3_E_DEV_NOT_FOUND)
-    {
-        rslt = BMP3_COMMUNICATION_ERROR_OR_WRONG_DEVICE;
-    }
+	/* initializing Bosch Driver Code */
+	rslt = bmp3_init(&t_dev);
 
-    if (rslt == BMP3_SENSOR_OK)
+	if (rslt == BMP3_E_COMM_FAIL || rslt == BMP3_E_DEV_NOT_FOUND) {
+		rslt = BMP3_COMMUNICATION_ERROR_OR_WRONG_DEVICE;
+	}
 
-    {
-        rslt = validate_trimming_param(&t_dev);
-    }
+	if (rslt == BMP3_SENSOR_OK) {
+		rslt = validate_trimming_param(&t_dev);
+	}
 
-    if (rslt == BMP3_SENSOR_OK){
-    	t_dev.settings.press_en = BMP3_ENABLE;
-    	t_dev.settings.temp_en = BMP3_ENABLE;
+	if (rslt == BMP3_SENSOR_OK) {
+		t_dev.settings.press_en = BMP3_ENABLE;
+		t_dev.settings.temp_en = BMP3_ENABLE;
 
-	/* Select the output data rate and over sampling settings for pressure and temperature */
-    	t_dev.settings.odr_filter.press_os = BMP3_OVERSAMPLING_32X;
-    	t_dev.settings.odr_filter.temp_os = BMP3_OVERSAMPLING_2X;
-    	t_dev.settings.odr_filter.odr = BMP3_ODR_25_HZ;
+		/* Select the output data rate and over sampling settings for pressure and temperature */
+		t_dev.settings.odr_filter.press_os = BMP3_OVERSAMPLING_32X;
+		t_dev.settings.odr_filter.temp_os = BMP3_OVERSAMPLING_2X;
+		t_dev.settings.odr_filter.odr = BMP3_ODR_25_HZ;
 
-    	/* Assign the settings which needs to be set in the sensor */
-    	settings_sel = BMP3_PRESS_EN_SEL | BMP3_TEMP_EN_SEL | BMP3_PRESS_OS_SEL | BMP3_TEMP_OS_SEL | BMP3_ODR_SEL;
-    	rslt = bmp3_set_sensor_settings(settings_sel, &t_dev);
+		/* Assign the settings which needs to be set in the sensor */
+		settings_sel = BMP3_PRESS_EN_SEL | BMP3_TEMP_EN_SEL | BMP3_PRESS_OS_SEL | BMP3_TEMP_OS_SEL | BMP3_ODR_SEL;
+		rslt = bmp3_set_sensor_settings(settings_sel, &t_dev);
 
-    	if (rslt == BMP3_SENSOR_OK)
-    	{
-	  t_dev.settings.op_mode = BMP3_FORCED_MODE;
-    	   rslt = bmp3_set_op_mode(&t_dev);
-    	   if (rslt == BMP3_SENSOR_OK)
-    	   {
-    	      t_dev.delay_ms(40);
-              sensor_comp = BMP3_PRESS | BMP3_TEMP;
-              /* Temperature and Pressure data are read and stored in the bmp3_data instance */
-              rslt = bmp3_get_sensor_data(sensor_comp, &data_sens, &t_dev);
+		if (rslt == BMP3_SENSOR_OK) {
+			t_dev.settings.op_mode = BMP3_FORCED_MODE;
+			rslt = bmp3_set_op_mode(&t_dev);
+			if (rslt == BMP3_SENSOR_OK) {
+				t_dev.delay_ms(40);
+				sensor_comp = BMP3_PRESS | BMP3_TEMP;
+				/* Temperature and Pressure data are read and stored in the bmp3_data instance */
+				rslt = bmp3_get_sensor_data(sensor_comp, &data_sens, &t_dev);
 
-    	   }
-    	}
-    	if (rslt == BMP3_SENSOR_OK)
-    	{
-    	  rslt = analyze_sensor_data(&data_sens);
+			}
+		}
+		if (rslt == BMP3_SENSOR_OK) {
+			rslt = analyze_sensor_data(&data_sens);
 
-    	                /* Set the power mode to sleep mode */
+			/* Set the power mode to sleep mode */
 //    	  if (rslt == BMP3_SENSOR_OK)
 //    	  {
 
@@ -387,8 +372,8 @@ static int bmp388_chip_init(struct device *dev)
 //    	     rslt = bmp3_set_op_mode(&t_dev);
 
 //    	  }
-       }
-    }
+		}
+	}
 	return 0;
 }
 
@@ -398,12 +383,12 @@ static inline int bmp388_spi_init(struct bmp388_data *data)
 	data->spi = device_get_binding(DT_INST_0_BOSCH_BMP388_BUS_NAME);
 	if (!data->spi) {
 		LOG_DBG("spi device not found: %s",
-			    DT_INST_0_BOSCH_BMP388_BUS_NAME);
+			DT_INST_0_BOSCH_BMP388_BUS_NAME);
 		return -EINVAL;
 	}
 
 	data->spi_cfg.operation = SPI_WORD_SET(8) | SPI_TRANSFER_MSB |
-		SPI_MODE_CPOL | SPI_MODE_CPHA;
+				  SPI_MODE_CPOL | SPI_MODE_CPHA;
 	data->spi_cfg.frequency = DT_INST_0_BOSCH_BMP388_SPI_MAX_FREQUENCY;
 	data->spi_cfg.slave = DT_INST_0_BOSCH_BMP388_BASE_ADDRESS;
 
@@ -414,12 +399,13 @@ static inline int bmp388_spi_init(struct bmp388_data *data)
 int bmp388_init(struct device *dev)
 {
 	struct bmp388_data *data = dev->driver_data;
+
 	bmp388_global = dev->driver_data;
 #ifdef DT_BOSCH_BMP388_BUS_I2C
 	data->i2c_master = device_get_binding(DT_INST_0_BOSCH_BMP388_BUS_NAME);
 	if (!data->i2c_master) {
 		LOG_DBG("i2c master not found: %s",
-			    DT_INST_0_BOSCH_BMP388_BUS_NAME);
+			DT_INST_0_BOSCH_BMP388_BUS_NAME);
 		return -EINVAL;
 	}
 
@@ -427,7 +413,7 @@ int bmp388_init(struct device *dev)
 #elif defined DT_BOSCH_BMP388_BUS_SPI
 	if (BMP388_spi_init(data) < 0) {
 		LOG_DBG("spi master not found: %s",
-			    DT_INST_0_BOSCH_BMP388_BUS_NAME);
+			DT_INST_0_BOSCH_BMP388_BUS_NAME);
 		return -EINVAL;
 	}
 #endif
