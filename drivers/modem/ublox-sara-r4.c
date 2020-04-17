@@ -1252,6 +1252,38 @@ static ssize_t offload_write(void *obj, const void *buffer, size_t count)
 	return offload_sendto(obj, buffer, count, 0, NULL, 0);
 }
 
+static ssize_t offload_sendmsg(void *obj, const struct msghdr *msg, int flags)
+{
+	ssize_t sent = 0;
+	int rc;
+
+	LOG_DBG("msg_iovlen:%d flags:%d", msg->msg_iovlen, flags);
+
+	for (int i = 0; i < msg->msg_iovlen; i++) {
+
+		const char *buf = msg->msg_iov[i].iov_base;
+		size_t len = msg->msg_iov[i].iov_len;
+
+		while (len > 0) {
+			rc = offload_sendto(obj, buf, len, flags, NULL, 0);
+			if (rc < 0) {
+				if (rc == -EAGAIN) {
+					k_sleep(K_MSEC(1));
+				} else {
+					sent = rc;
+					break;
+				}
+			} else {
+				sent += rc;
+				buf += rc;
+				len -= rc;
+			}
+		}
+	}
+
+	return (ssize_t)sent;
+}
+
 static const struct socket_op_vtable offload_socket_fd_op_vtable = {
 	.fd_vtable = {
 		.read = offload_read,
@@ -1264,7 +1296,7 @@ static const struct socket_op_vtable offload_socket_fd_op_vtable = {
 	.recvfrom = offload_recvfrom,
 	.listen = NULL,
 	.accept = NULL,
-	.sendmsg = NULL,
+	.sendmsg = offload_sendmsg,
 	.getsockopt = NULL,
 	.setsockopt = NULL,
 };
