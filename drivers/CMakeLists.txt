@@ -2,6 +2,7 @@
 
 add_definitions(-D__ZEPHYR_SUPERVISOR__)
 
+add_subdirectory(blueberry)
 add_subdirectory(console)
 add_subdirectory(interrupt_controller)
 add_subdirectory(misc)

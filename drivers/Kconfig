@@ -5,6 +5,8 @@
 
 menu "Device Drivers"
 
+source "drivers/blueberry/Kconfig"
+
 source "drivers/bluetooth/Kconfig"
 
 source "drivers/ieee802154/Kconfig"
