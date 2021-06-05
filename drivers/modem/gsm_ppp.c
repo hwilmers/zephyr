@@ -16,6 +16,7 @@ LOG_MODULE_REGISTER(modem_gsm, CONFIG_MODEM_LOG_LEVEL);
 #include <drivers/gsm_ppp.h>
 #include <drivers/uart.h>
 #include <drivers/console/uart_mux.h>
+#include <stdio.h>
 
 #include "modem_context.h"
 #include "modem_iface_uart.h"
@@ -29,6 +30,15 @@ LOG_MODULE_REGISTER(modem_gsm, CONFIG_MODEM_LOG_LEVEL);
 #define GSM_RECV_MAX_BUF                30
 #define GSM_RECV_BUF_SIZE               128
 #define GSM_ATTACH_RETRY_DELAY_MSEC     1000
+#define GSM_RSSI_RETRY_DELAY_MSEC       1000
+#define GSM_RSSI_RETRIES                10
+#define GSM_RSSI_INVALID                -1000
+
+#if defined(CONFIG_MODEM_GSM_ENABLE_CESQ_RSSI)
+	#define GSM_RSSI_MAXVAL          0
+#else
+	#define GSM_RSSI_MAXVAL         -51
+#endif
 
 
 /* During the modem setup, we first create DLCI control channel and then
@@ -65,9 +75,11 @@ static struct gsm_modem {
 	struct net_if *iface;
 
 	int attach_retries;
+	int rssi_retries;
 	bool mux_enabled : 1;
 	bool mux_setup_done : 1;
 	bool setup_done : 1;
+	bool attached : 1;
 } gsm;
 
 NET_BUF_POOL_DEFINE(gsm_recv_pool, GSM_RECV_MAX_BUF, GSM_RECV_BUF_SIZE,
@@ -75,6 +87,38 @@ NET_BUF_POOL_DEFINE(gsm_recv_pool, GSM_RECV_MAX_BUF, GSM_RECV_BUF_SIZE,
 K_KERNEL_STACK_DEFINE(gsm_rx_stack, GSM_RX_STACK_SIZE);
 
 struct k_thread gsm_rx_thread;
+static struct k_work_delayable rssi_work_handle;
+
+#if defined(CONFIG_MODEM_GSM_ENABLE_CESQ_RSSI)
+	/* helper macro to keep readability */
+#define ATOI(s_, value_, desc_) modem_atoi(s_, value_, desc_, __func__)
+
+/**
+ * @brief  Convert string to long integer, but handle errors
+ *
+ * @param  s: string with representation of integer number
+ * @param  err_value: on error return this value instead
+ * @param  desc: name the string being converted
+ * @param  func: function where this is called (typically __func__)
+ *
+ * @retval return integer conversion on success, or err_value on error
+ */
+static int modem_atoi(const char *s, const int err_value,
+				const char *desc, const char *func)
+{
+	int ret;
+	char *endptr;
+
+	ret = (int)strtol(s, &endptr, 10);
+	if (!endptr || *endptr != '\0') {
+		LOG_ERR("bad %s '%s' in %s", log_strdup(s),
+			 log_strdup(desc), log_strdup(func));
+		return err_value;
+	}
+
+	return ret;
+}
+#endif
 
 static void gsm_rx(struct gsm_modem *gsm)
 {
@@ -233,6 +277,66 @@ MODEM_CMD_DEFINE(on_cmd_atcmdinfo_iccid)
 #endif /* CONFIG_MODEM_SIM_NUMBERS */
 #endif /* CONFIG_MODEM_SHELL */
 
+#if defined(CONFIG_MODEM_GSM_ENABLE_CESQ_RSSI)
+/*
+ * Handler: +CESQ: <rxlev>[0],<ber>[1],<rscp>[2],<ecn0>[3],<rsrq>[4],<rsrp>[5]
+ */
+MODEM_CMD_DEFINE(on_cmd_atcmdinfo_rssi_cesq)
+{
+	int rsrp, rscp, rxlev;
+
+	rsrp = ATOI(argv[5], 0, "rsrp");
+	rscp = ATOI(argv[2], 0, "rscp");
+	rxlev = ATOI(argv[0], 0, "rxlev");
+
+	if (rsrp >= 0 && rsrp <= 97) {
+		gsm.context.data_rssi = -140 + (rsrp - 1);
+		LOG_INF("RSRP: %d", gsm.context.data_rssi);
+	} else if (rscp >= 0 && rscp <= 96) {
+		gsm.context.data_rssi = -120 + (rscp - 1);
+		LOG_INF("RSCP: %d", gsm.context.data_rssi);
+	} else if (rxlev >= 0 && rxlev <= 63) {
+		gsm.context.data_rssi = -110 + (rxlev - 1);
+		LOG_INF("RSSI: %d", gsm.context.data_rssi);
+	} else {
+		gsm.context.data_rssi = GSM_RSSI_INVALID;
+		LOG_INF("RSRP/RSSI not known");
+	}
+
+	return 0;
+}
+#else
+/* Handler: +CSQ: <signal_power>[0],<qual>[1] */
+MODEM_CMD_DEFINE(on_cmd_atcmdinfo_rssi_csq)
+{
+	/* Expected response is "+CSQ: <signal_power>,<qual>" */
+	if (argc) {
+		int rssi = atoi(argv[0]);
+
+		if (rssi >= 0 && rssi <= 31) {
+			rssi = -113 + (rssi * 2);
+		} else {
+			rssi = GSM_RSSI_INVALID;
+		}
+
+		gsm.context.data_rssi = rssi;
+		LOG_INF("RSSI: %d", rssi);
+	}
+
+	k_sem_give(&gsm.sem_response);
+
+	return 0;
+}
+#endif
+
+#if defined(CONFIG_MODEM_GSM_ENABLE_CESQ_RSSI)
+static const struct modem_cmd read_rssi_cmd =
+	MODEM_CMD("+CESQ:", on_cmd_atcmdinfo_rssi_cesq, 6U, ",");
+#else
+static const struct modem_cmd read_rssi_cmd =
+	MODEM_CMD("+CSQ:", on_cmd_atcmdinfo_rssi_csq, 2U, ",");
+#endif
+
 static const struct setup_cmd setup_cmds[] = {
 	/* no echo */
 	SETUP_CMD_NOHANDLE("ATE0"),
@@ -353,6 +457,11 @@ static void gsm_finalize_connection(struct gsm_modem *gsm)
 {
 	int ret;
 
+	/* If already attached, jump right to RSSI readout */
+	if (gsm->attached) {
+		goto attached;
+	}
+
 	/* If attach check failed, we should not redo every setup step */
 	if (gsm->attach_retries) {
 		goto attaching;
@@ -428,7 +537,39 @@ attaching:
 	}
 
 	/* Attached, clear retry counter */
+	gsm->attached = true;
 	gsm->attach_retries = 0;
+
+	LOG_DBG("modem attach returned %d, %s", ret, "read RSSI");
+
+	gsm->rssi_retries = GSM_RSSI_RETRIES;
+
+attached:
+
+	/* Read connection quality (RSSI) before PPP carrier is ON */
+
+#if defined(CONFIG_MODEM_GSM_ENABLE_CESQ_RSSI)
+	ret = modem_cmd_send_nolock(&gsm->context.iface, &gsm->context.cmd_handler, &read_rssi_cmd,
+				    1, "AT+CESQ", &gsm->sem_response, GSM_CMD_SETUP_TIMEOUT);
+#else
+	ret = modem_cmd_send_nolock(&gsm->context.iface, &gsm->context.cmd_handler, &read_rssi_cmd,
+				    1, "AT+CSQ", &gsm->sem_response, GSM_CMD_SETUP_TIMEOUT);
+#endif
+
+	if (ret < 0) {
+		LOG_DBG("Not answer to RSSI readout, %s", "ignoring...");
+	}
+
+	if (!(gsm->context.data_rssi && gsm->context.data_rssi != GSM_RSSI_INVALID &&
+	    gsm->context.data_rssi < GSM_RSSI_MAXVAL)) {
+
+		LOG_DBG("Not valid RSSI, %s", "retrying...");
+		if (gsm->rssi_retries-- > 0) {
+			(void)k_work_reschedule(&gsm->gsm_configure_work,
+						K_MSEC(GSM_RSSI_RETRY_DELAY_MSEC));
+			return;
+		}
+	}
 
 	LOG_DBG("modem setup returned %d, %s", ret, "enable PPP");
 
@@ -473,8 +614,33 @@ attaching:
 			}
 		}
 		modem_cmd_handler_tx_unlock(&gsm->context.cmd_handler);
+		k_work_schedule(&rssi_work_handle, K_NO_WAIT);
 	}
 }
+
+#if defined(CONFIG_GSM_MUX)
+static void rssi_handler(struct k_work *work)
+{
+
+	/* Read radio signal stength (RSSI) during PPP session is established */
+
+	int ret;
+
+#if defined(CONFIG_MODEM_GSM_ENABLE_CESQ_RSSI)
+	ret = modem_cmd_send_nolock(&gsm.context.iface, &gsm.context.cmd_handler,
+		&read_rssi_cmd, 1, "AT+CESQ", &gsm.sem_response, GSM_CMD_SETUP_TIMEOUT);
+#else
+	ret = modem_cmd_send_nolock(&gsm.context.iface, &gsm.context.cmd_handler,
+		&read_rssi_cmd, 1, "AT+CSQ", &gsm.sem_response, GSM_CMD_SETUP_TIMEOUT);
+#endif
+
+	if (ret < 0) {
+		LOG_DBG("Not answer to RSSI readout, %s", "ignoring...");
+	}
+
+	k_work_reschedule(&rssi_work_handle, K_SECONDS(CONFIG_MODEM_GSM_RSSI_WORK_PERIOD));
+}
+#endif
 
 static int mux_enable(struct gsm_modem *gsm)
 {
@@ -724,6 +890,11 @@ void gsm_ppp_start(const struct device *dev)
 
 	k_work_init_delayable(&gsm->gsm_configure_work, gsm_configure);
 	(void)k_work_reschedule(&gsm->gsm_configure_work, K_NO_WAIT);
+
+#if defined(CONFIG_GSM_MUX)
+	k_work_init_delayable(&rssi_work_handle, rssi_handler);
+#endif
+
 }
 
 void gsm_ppp_stop(const struct device *dev)

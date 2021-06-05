@@ -78,6 +78,14 @@ config MODEM_GSM_MANUAL_MCCMNO
 	  the network provider and may need to be changed if auto is not
 	  selected.
 
+config MODEM_GSM_RSSI_WORK_PERIOD
+	int "Configure RSSI WORK polling period"
+	default 30
+
+config MODEM_GSM_ENABLE_CESQ_RSSI
+	bool "Enable +CESQ RSSI measurement"
+	default n
+
 config MODEM_GSM_FACTORY_RESET_AT_BOOT
 	bool "Factory reset modem at boot"
 	help
