@@ -31,7 +31,7 @@ LOG_MODULE_REGISTER(modem_gsm, CONFIG_MODEM_LOG_LEVEL);
 #define GSM_RECV_BUF_SIZE               128
 #define GSM_ATTACH_RETRY_DELAY_MSEC     1000
 #define GSM_RSSI_RETRY_DELAY_MSEC       1000
-#define GSM_RSSI_RETRIES                10
+#define GSM_RSSI_RETRIES                60
 #define GSM_RSSI_INVALID                -1000
 
 #if defined(CONFIG_MODEM_GSM_ENABLE_CESQ_RSSI)
@@ -601,10 +601,6 @@ attaching:
 		return;
 	}
 
-#if defined(CONFIG_MODEM_CELL_INFO)
-	(void)gsm_query_cellinfo(gsm);
-#endif
-
 	/* Attached, clear retry counter */
 	gsm->attached = true;
 	gsm->attach_retries = 0;
@@ -630,7 +626,7 @@ attached:
 	}
 
 	if (!(gsm->context.data_rssi && gsm->context.data_rssi != GSM_RSSI_INVALID &&
-	    gsm->context.data_rssi < GSM_RSSI_MAXVAL)) {
+	    gsm->context.data_rssi < GSM_RSSI_MAXVAL-5)) {
 
 		LOG_DBG("Not valid RSSI, %s", "retrying...");
 		if (gsm->rssi_retries-- > 0) {
@@ -641,6 +637,10 @@ attached:
 	}
 
 	LOG_DBG("modem setup returned %d, %s", ret, "enable PPP");
+
+#if defined(CONFIG_MODEM_CELL_INFO)
+	(void)gsm_query_cellinfo(gsm);
+#endif
 
 	ret = modem_cmd_handler_setup_cmds_nolock(&gsm->context.iface,
 						  &gsm->context.cmd_handler,
@@ -706,6 +706,10 @@ static void rssi_handler(struct k_work *work)
 	if (ret < 0) {
 		LOG_DBG("Not answer to RSSI readout, %s", "ignoring...");
 	}
+
+#if defined(CONFIG_MODEM_CELL_INFO)
+	(void)gsm_query_cellinfo(&gsm);
+#endif
 
 	k_work_reschedule(&rssi_work_handle, K_SECONDS(CONFIG_MODEM_GSM_RSSI_WORK_PERIOD));
 }
