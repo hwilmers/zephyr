@@ -135,7 +135,6 @@ config MODEM_SIM_NUMBERS
 config MODEM_CELL_INFO
 	bool "Enable querying for operator and cell info"
 	depends on MODEM_SHELL
-	default n
 	help
 	  Query for numerical operator id, location area code and cell id.
 
