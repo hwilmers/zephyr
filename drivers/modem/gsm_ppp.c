@@ -33,7 +33,7 @@ LOG_MODULE_REGISTER(modem_gsm, CONFIG_MODEM_LOG_LEVEL);
 #define GSM_ATTACH_RETRY_DELAY_MSEC     1000
 
 #define GSM_RSSI_RETRY_DELAY_MSEC       2000
-#define GSM_RSSI_RETRIES                10
+#define GSM_RSSI_RETRIES                30
 #define GSM_RSSI_INVALID                -1000
 
 #if defined(CONFIG_MODEM_GSM_ENABLE_CESQ_RSSI)
@@ -674,12 +674,12 @@ attaching:
 
  attached:
 
-	if (!IS_ENABLED(CONFIG_GSM_MUX)) {
+	if (true || !IS_ENABLED(CONFIG_GSM_MUX)) {
 		/* Read connection quality (RSSI) before PPP carrier is ON */
 		rssi_handler(NULL);
 
 		if (!(gsm->context.data_rssi && gsm->context.data_rssi != GSM_RSSI_INVALID &&
-			gsm->context.data_rssi < GSM_RSSI_MAXVAL)) {
+			gsm->context.data_rssi < GSM_RSSI_MAXVAL-5)) {
 
 			LOG_DBG("Not valid RSSI, %s", "retrying...");
 			if (gsm->rssi_retries-- > 0) {
