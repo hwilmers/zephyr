@@ -568,7 +568,10 @@ static void rssi_handler(struct k_work *work)
 #if defined(CONFIG_MODEM_CELL_INFO)
 	(void) gsm_query_cellinfo(&gsm);
 #endif
-	k_work_reschedule(&rssi_work_handle, K_SECONDS(CONFIG_MODEM_GSM_RSSI_POLLING_PERIOD));
+	if (work) {
+		k_work_reschedule(&rssi_work_handle,
+				  K_SECONDS(CONFIG_MODEM_GSM_RSSI_POLLING_PERIOD));
+	}
 #endif
 
 }
