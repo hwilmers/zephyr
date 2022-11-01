@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#define DT_DRV_COMPAT zephyr_gsm_ppp
+
 #include <logging/log.h>
 LOG_MODULE_REGISTER(modem_gsm, CONFIG_MODEM_LOG_LEVEL);
 
@@ -32,9 +34,10 @@ LOG_MODULE_REGISTER(modem_gsm, CONFIG_MODEM_LOG_LEVEL);
 #define GSM_RECV_BUF_SIZE               128
 #define GSM_ATTACH_RETRY_DELAY_MSEC     1000
 
-#define GSM_REGISTER_RETRY_DELAY_MSEC   1000
-#define GSM_REGISTER_RETRIES            120
+#define GSM_RSSI_RETRY_DELAY_MSEC       2000
+#define GSM_RSSI_RETRIES                10
 #define GSM_RSSI_INVALID                -1000
+
 #if defined(CONFIG_MODEM_GSM_ENABLE_CESQ_RSSI)
 	#define GSM_RSSI_MAXVAL          0
 #else
@@ -74,7 +77,7 @@ static struct gsm_modem {
 
 	struct net_if *iface;
 
-	int register_retries;
+	int rssi_retries;
 	int attach_retries;
 	bool mux_enabled : 1;
 	bool mux_setup_done : 1;
@@ -325,7 +328,6 @@ MODEM_CMD_DEFINE(on_cmd_atcmdinfo_cereg)
 }
 
 static const struct setup_cmd query_cellinfo_cmds[] = {
-	SETUP_CMD_NOHANDLE("AT+CEREG=2"),
 	SETUP_CMD("AT+CEREG?", "", on_cmd_atcmdinfo_cereg, 5U, ","),
 	SETUP_CMD_NOHANDLE("AT+COPS=3,2"),
 	SETUP_CMD("AT+COPS?", "", on_cmd_atcmdinfo_cops, 3U, ","),
@@ -433,8 +435,14 @@ static const struct setup_cmd setup_cmds[] = {
 	/* disable unsolicited network registration codes */
 	SETUP_CMD_NOHANDLE("AT+CREG=0"),
 
+	/* disable deep sleep power saving */
+	SETUP_CMD_NOHANDLE("AT+CPSMS=0"),
+
 	/* create PDP context */
 	SETUP_CMD_NOHANDLE("AT+CGDCONT=1,\"IP\",\"" CONFIG_MODEM_GSM_APN "\""),
+
+	/* set full phone functionality */
+	SETUP_CMD_NOHANDLE("AT+CFUN=1"),
 };
 
 MODEM_CMD_DEFINE(on_cmd_atcmdinfo_attached)
@@ -484,7 +492,6 @@ static int gsm_setup_mccmno(struct gsm_modem *gsm)
 /* First AT+COPS? is sent to check if automatic selection for operator
  * is already enabled, if yes we do not send the command AT+COPS= 0,0.
  */
-
 		ret = modem_cmd_send_nolock(&gsm->context.iface,
 					    &gsm->context.cmd_handler,
 					    &read_cops_cmd,
@@ -521,8 +528,7 @@ static struct net_if *ppp_net_if(void)
 static void set_ppp_carrier_on(struct gsm_modem *gsm)
 {
 	static const struct ppp_api *api;
-	const struct device *ppp_dev =
-		device_get_binding(CONFIG_NET_PPP_DRV_NAME);
+	const struct device *ppp_dev = device_get_binding(CONFIG_NET_PPP_DRV_NAME);
 	struct net_if *iface = gsm->iface;
 	int ret;
 
@@ -563,13 +569,13 @@ static void rssi_handler(struct k_work *work)
 		LOG_DBG("No answer to RSSI readout, %s", "ignoring...");
 	}
 
+#if defined(CONFIG_GSM_MUX)
 #if defined(CONFIG_MODEM_CELL_INFO)
 	(void) gsm_query_cellinfo(&gsm);
 #endif
-	if (work) {
-		k_work_reschedule(&rssi_work_handle,
-				  K_SECONDS(CONFIG_MODEM_GSM_RSSI_POLLING_PERIOD));
-	}
+	k_work_reschedule(&rssi_work_handle, K_SECONDS(CONFIG_MODEM_GSM_RSSI_POLLING_PERIOD));
+#endif
+
 }
 
 static void gsm_finalize_connection(struct gsm_modem *gsm)
@@ -669,22 +675,27 @@ attaching:
 	gsm->attach_retries = 0;
 
 	LOG_DBG("modem attach returned %d, %s", ret, "read RSSI");
-	gsm->register_retries = GSM_REGISTER_RETRIES;
+	gsm->rssi_retries = GSM_RSSI_RETRIES;
 
  attached:
 
-	/* Read connection quality (RSSI) and cell info before PPP carrier is ON */
-	rssi_handler(NULL);
+	if (!IS_ENABLED(CONFIG_GSM_MUX)) {
+		/* Read connection quality (RSSI) before PPP carrier is ON */
+		rssi_handler(NULL);
 
-	/* Wait until we are registered to an operator */
-	if (gsm->context.data_operator == 0) {
+		if (!(gsm->context.data_rssi && gsm->context.data_rssi != GSM_RSSI_INVALID &&
+			gsm->context.data_rssi < GSM_RSSI_MAXVAL)) {
 
-		LOG_INF("Not registered to operator, %s", "retrying...");
-		if (gsm->register_retries-- > 0) {
-			(void)k_work_reschedule(&gsm->gsm_configure_work,
-						K_MSEC(GSM_REGISTER_RETRY_DELAY_MSEC));
-			return;
+			LOG_DBG("Not valid RSSI, %s", "retrying...");
+			if (gsm->rssi_retries-- > 0) {
+				(void)k_work_reschedule(&gsm->gsm_configure_work,
+							K_MSEC(GSM_RSSI_RETRY_DELAY_MSEC));
+				return;
+			}
 		}
+#if defined(CONFIG_MODEM_CELL_INFO)
+		(void) gsm_query_cellinfo(gsm);
+#endif
 	}
 
 	LOG_DBG("modem setup returned %d, %s", ret, "enable PPP");
@@ -761,6 +772,20 @@ static int mux_enable(struct gsm_modem *gsm)
 			STRINGIFY(CONFIG_GSM_MUX_MRU_DEFAULT_LEN),
 			&gsm->sem_response,
 			GSM_CMD_AT_TIMEOUT);
+	} else if (IS_ENABLED(CONFIG_MODEM_GSM_QUECTEL)) {
+		ret = modem_cmd_send_nolock(&gsm->context.iface,
+				    &gsm->context.cmd_handler,
+				    &response_cmds[0],
+				    ARRAY_SIZE(response_cmds),
+				    "AT+CMUX=0,0,5,"
+				    STRINGIFY(CONFIG_GSM_MUX_MRU_DEFAULT_LEN),
+				    &gsm->sem_response,
+				    GSM_CMD_AT_TIMEOUT);
+
+		/* Arbitrary delay for Quectel modems to initialize the CMUX,
+		 * without this the AT cmd will fail.
+		 */
+		k_sleep(K_SECONDS(1));
 	} else {
 		/* Generic GSM modem */
 		ret = modem_cmd_send_nolock(&gsm->context.iface,
