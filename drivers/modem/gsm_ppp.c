@@ -329,7 +329,6 @@ MODEM_CMD_DEFINE(on_cmd_atcmdinfo_cereg)
 
 static const struct setup_cmd query_cellinfo_cmds[] = {
 	SETUP_CMD("AT+CEREG?", "", on_cmd_atcmdinfo_cereg, 5U, ","),
-	SETUP_CMD_NOHANDLE("AT+COPS=3,2"),
 	SETUP_CMD("AT+COPS?", "", on_cmd_atcmdinfo_cops, 3U, ","),
 };
 
@@ -345,6 +344,28 @@ static int gsm_query_cellinfo(struct gsm_modem *gsm)
 						  GSM_CMD_SETUP_TIMEOUT);
 	if (ret < 0) {
 		LOG_WRN("modem query for cell info returned %d", ret);
+	}
+
+	return ret;
+}
+
+static const struct setup_cmd setup_cellinfo_cmds[] = {
+	SETUP_CMD_NOHANDLE("AT+CEREG=2"),
+	SETUP_CMD_NOHANDLE("AT+COPS=3,2"),
+};
+
+static int gsm_setup_cellinfo(struct gsm_modem *gsm)
+{
+	int ret;
+
+	ret = modem_cmd_handler_setup_cmds_nolock(&gsm->context.iface,
+						  &gsm->context.cmd_handler,
+						  setup_cellinfo_cmds,
+						  ARRAY_SIZE(setup_cellinfo_cmds),
+						  &gsm->sem_response,
+						  GSM_CMD_SETUP_TIMEOUT);
+	if (ret < 0) {
+		LOG_WRN("modem setup cell info returned %d", ret);
 	}
 
 	return ret;
@@ -440,9 +461,6 @@ static const struct setup_cmd setup_cmds[] = {
 
 	/* create PDP context */
 	SETUP_CMD_NOHANDLE("AT+CGDCONT=1,\"IP\",\"" CONFIG_MODEM_GSM_APN "\""),
-
-	/* set full phone functionality */
-	SETUP_CMD_NOHANDLE("AT+CFUN=1"),
 };
 
 MODEM_CMD_DEFINE(on_cmd_atcmdinfo_attached)
@@ -694,6 +712,7 @@ attaching:
 			}
 		}
 #if defined(CONFIG_MODEM_CELL_INFO)
+		(void) gsm_setup_cellinfo(gsm);
 		(void) gsm_query_cellinfo(gsm);
 #endif
 	}
@@ -740,6 +759,9 @@ attaching:
 					DLCI_AT, gsm->at_dev->name);
 			}
 		}
+#if defined(CONFIG_MODEM_CELL_INFO)
+		(void) gsm_setup_cellinfo(gsm);
+#endif
 		modem_cmd_handler_tx_unlock(&gsm->context.cmd_handler);
 		k_work_schedule(&rssi_work_handle, K_SECONDS(CONFIG_MODEM_GSM_RSSI_POLLING_PERIOD));
 	}
