@@ -37,6 +37,7 @@ LOG_MODULE_REGISTER(modem_gsm, CONFIG_MODEM_LOG_LEVEL);
 #define GSM_RSSI_RETRY_DELAY_MSEC       2000
 #define GSM_RSSI_RETRIES                10
 #define GSM_RSSI_INVALID                -1000
+#define GSM_RSSI_TIMEOUT                K_SECONDS(10)
 
 #if defined(CONFIG_MODEM_GSM_ENABLE_CESQ_RSSI)
 	#define GSM_RSSI_MAXVAL          0
@@ -76,6 +77,8 @@ static struct gsm_modem {
 	const struct device *control_dev;
 
 	struct net_if *iface;
+
+	bool modem_attached;
 
 	int rssi_retries;
 	int attach_retries;
@@ -470,6 +473,7 @@ MODEM_CMD_DEFINE(on_cmd_atcmdinfo_attached)
 	/* Expected response is "+CGATT: 0|1" so simply look for '1' */
 	if (argc && atoi(argv[0]) == 1) {
 		error = 0;
+		gsm.modem_attached = true;
 		LOG_INF("Attached to packet service!");
 	}
 
@@ -577,10 +581,10 @@ static void rssi_handler(struct k_work *work)
 	int ret;
 #if defined(CONFIG_MODEM_GSM_ENABLE_CESQ_RSSI)
 	ret = modem_cmd_send_nolock(&gsm.context.iface, &gsm.context.cmd_handler,
-		&read_rssi_cmd, 1, "AT+CESQ", &gsm.sem_response, GSM_CMD_SETUP_TIMEOUT);
+		&read_rssi_cmd, 1, "AT+CESQ", &gsm.sem_response, GSM_RSSI_TIMEOUT);
 #else
 	ret = modem_cmd_send_nolock(&gsm.context.iface, &gsm.context.cmd_handler,
-		&read_rssi_cmd, 1, "AT+CSQ", &gsm.sem_response, GSM_CMD_SETUP_TIMEOUT);
+		&read_rssi_cmd, 1, "AT+CSQ", &gsm.sem_response, GSM_RSSI_TIMEOUT);
 #endif
 
 	if (ret < 0) {
@@ -668,7 +672,7 @@ attaching:
 				    "AT+CGATT?",
 				    &gsm->sem_response,
 				    GSM_CMD_SETUP_TIMEOUT);
-	if (ret < 0) {
+	if (ret < 0 || !gsm->modem_attached) {
 		/*
 		 * attach_retries not set        -> trigger N attach retries
 		 * attach_retries set            -> decrement and retry
