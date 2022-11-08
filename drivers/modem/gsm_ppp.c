@@ -33,9 +33,8 @@ LOG_MODULE_REGISTER(modem_gsm, CONFIG_MODEM_LOG_LEVEL);
 #define GSM_RECV_MAX_BUF                30
 #define GSM_RECV_BUF_SIZE               128
 #define GSM_ATTACH_RETRY_DELAY_MSEC     1000
-
-#define GSM_RSSI_RETRY_DELAY_MSEC       2000
-#define GSM_RSSI_RETRIES                10
+#define GSM_REGISTER_RETRY_DELAY_MSEC   1000
+#define GSM_REGISTER_RETRIES            120
 #define GSM_RSSI_INVALID                -1000
 #define GSM_RSSI_TIMEOUT                K_SECONDS(10)
 
@@ -80,7 +79,7 @@ static struct gsm_modem {
 
 	bool modem_attached;
 
-	int rssi_retries;
+	int register_retries;
 	int attach_retries;
 	bool mux_enabled : 1;
 	bool mux_setup_done : 1;
@@ -311,9 +310,9 @@ MODEM_CMD_DEFINE(on_cmd_atcmdinfo_iccid)
 	return 0;
 }
 #endif /* CONFIG_MODEM_SIM_NUMBERS */
+#endif /* CONFIG_MODEM_SHELL */
 
 #if defined(CONFIG_MODEM_CELL_INFO)
-
 /*
  * Handler: +CEREG: <n>[0],<stat>[1],<tac>[2],<ci>[3],<AcT>[4]
  */
@@ -329,42 +328,23 @@ MODEM_CMD_DEFINE(on_cmd_atcmdinfo_cereg)
 
 	return 0;
 }
+#endif
 
-static const struct setup_cmd query_cellinfo_cmds[] = {
-	SETUP_CMD("AT+CEREG?", "", on_cmd_atcmdinfo_cereg, 5U, ","),
-	SETUP_CMD("AT+COPS?", "", on_cmd_atcmdinfo_cops, 3U, ","),
-};
-
-static int gsm_query_cellinfo(struct gsm_modem *gsm)
-{
-	int ret;
-
-	ret = modem_cmd_handler_setup_cmds_nolock(&gsm->context.iface,
-						  &gsm->context.cmd_handler,
-						  query_cellinfo_cmds,
-						  ARRAY_SIZE(query_cellinfo_cmds),
-						  &gsm->sem_response,
-						  GSM_CMD_SETUP_TIMEOUT);
-	if (ret < 0) {
-		LOG_WRN("modem query for cell info returned %d", ret);
-	}
-
-	return ret;
-}
-
-static const struct setup_cmd setup_cellinfo_cmds[] = {
+static const struct setup_cmd setup_operator_info_cmds[] = {
+#if defined(CONFIG_MODEM_CELL_INFO)
 	SETUP_CMD_NOHANDLE("AT+CEREG=2"),
+#endif
 	SETUP_CMD_NOHANDLE("AT+COPS=3,2"),
 };
 
-static int gsm_setup_cellinfo(struct gsm_modem *gsm)
+static int gsm_setup_operator_info(struct gsm_modem *gsm)
 {
-	int ret;
+	int ret = 0;
 
 	ret = modem_cmd_handler_setup_cmds_nolock(&gsm->context.iface,
 						  &gsm->context.cmd_handler,
-						  setup_cellinfo_cmds,
-						  ARRAY_SIZE(setup_cellinfo_cmds),
+						  setup_operator_info_cmds,
+						  ARRAY_SIZE(setup_operator_info_cmds),
 						  &gsm->sem_response,
 						  GSM_CMD_SETUP_TIMEOUT);
 	if (ret < 0) {
@@ -373,8 +353,6 @@ static int gsm_setup_cellinfo(struct gsm_modem *gsm)
 
 	return ret;
 }
-#endif /* CONFIG_MODEM_CELL_INFO */
-#endif /* CONFIG_MODEM_SHELL */
 
 #if defined(CONFIG_MODEM_GSM_ENABLE_CESQ_RSSI)
 /*
@@ -428,14 +406,17 @@ MODEM_CMD_DEFINE(on_cmd_atcmdinfo_rssi_csq)
 }
 #endif
 
+static const struct setup_cmd query_rssi_operator_info_cmds[] = {
 #if defined(CONFIG_MODEM_GSM_ENABLE_CESQ_RSSI)
-static const struct modem_cmd read_rssi_cmd =
-	MODEM_CMD("+CESQ:", on_cmd_atcmdinfo_rssi_cesq, 6U, ",");
+	SETUP_CMD("AT+CESQ", "+CESQ:", on_cmd_atcmdinfo_rssi_cesq, 6U, ","),
 #else
-static const struct modem_cmd read_rssi_cmd =
-	MODEM_CMD("+CSQ:", on_cmd_atcmdinfo_rssi_csq, 2U, ",");
+	SETUP_CMD("AT+CSQ", "+CSQ:", on_cmd_atcmdinfo_rssi_csq, 2U, ","),
 #endif
-
+#if defined(CONFIG_MODEM_CELL_INFO)
+	SETUP_CMD("AT+CEREG?", "", on_cmd_atcmdinfo_cereg, 5U, ","),
+#endif
+	SETUP_CMD("AT+COPS?", "", on_cmd_atcmdinfo_cops, 3U, ","),
+};
 static const struct setup_cmd setup_cmds[] = {
 	/* no echo */
 	SETUP_CMD_NOHANDLE("ATE0"),
@@ -458,9 +439,6 @@ static const struct setup_cmd setup_cmds[] = {
 
 	/* disable unsolicited network registration codes */
 	SETUP_CMD_NOHANDLE("AT+CREG=0"),
-
-	/* disable deep sleep power saving */
-	SETUP_CMD_NOHANDLE("AT+CPSMS=0"),
 
 	/* create PDP context */
 	SETUP_CMD_NOHANDLE("AT+CGDCONT=1,\"IP\",\"" CONFIG_MODEM_GSM_APN "\""),
@@ -579,23 +557,30 @@ static void set_ppp_carrier_on(struct gsm_modem *gsm)
 static void rssi_handler(struct k_work *work)
 {
 	int ret;
-#if defined(CONFIG_MODEM_GSM_ENABLE_CESQ_RSSI)
-	ret = modem_cmd_send_nolock(&gsm.context.iface, &gsm.context.cmd_handler,
-		&read_rssi_cmd, 1, "AT+CESQ", &gsm.sem_response, GSM_RSSI_TIMEOUT);
-#else
-	ret = modem_cmd_send_nolock(&gsm.context.iface, &gsm.context.cmd_handler,
-		&read_rssi_cmd, 1, "AT+CSQ", &gsm.sem_response, GSM_RSSI_TIMEOUT);
-#endif
 
-	if (ret < 0) {
-		LOG_DBG("No answer to RSSI readout, %s", "ignoring...");
+	if (work) {
+		ret = modem_cmd_handler_setup_cmds(&gsm.context.iface,
+							  &gsm.context.cmd_handler,
+							  query_rssi_operator_info_cmds,
+							  ARRAY_SIZE(query_rssi_operator_info_cmds),
+							  &gsm.sem_response,
+							  GSM_CMD_SETUP_TIMEOUT);
+	} else {
+		ret = modem_cmd_handler_setup_cmds_nolock(&gsm.context.iface,
+							  &gsm.context.cmd_handler,
+							  query_rssi_operator_info_cmds,
+							  ARRAY_SIZE(query_rssi_operator_info_cmds),
+							  &gsm.sem_response,
+							  GSM_CMD_SETUP_TIMEOUT);
 	}
-
+	if (ret < 0) {
+		LOG_WRN("modem query for rssi and cell info returned %d", ret);
+	}
 #if defined(CONFIG_GSM_MUX)
-#if defined(CONFIG_MODEM_CELL_INFO)
-	(void) gsm_query_cellinfo(&gsm);
-#endif
-	k_work_reschedule(&rssi_work_handle, K_SECONDS(CONFIG_MODEM_GSM_RSSI_POLLING_PERIOD));
+	if (work) {
+		k_work_reschedule(&rssi_work_handle,
+				  K_SECONDS(CONFIG_MODEM_GSM_RSSI_POLLING_PERIOD));
+	}
 #endif
 
 }
@@ -697,28 +682,21 @@ attaching:
 	gsm->attach_retries = 0;
 
 	LOG_DBG("modem attach returned %d, %s", ret, "read RSSI");
-	gsm->rssi_retries = GSM_RSSI_RETRIES;
+	gsm->register_retries = GSM_REGISTER_RETRIES;
 
  attached:
+	/* Read connection quality (RSSI) and operator info before PPP carrier is ON */
+	(void) gsm_setup_operator_info(gsm);
+	rssi_handler(NULL);
 
-	if (!IS_ENABLED(CONFIG_GSM_MUX)) {
-		/* Read connection quality (RSSI) before PPP carrier is ON */
-		rssi_handler(NULL);
-
-		if (!(gsm->context.data_rssi && gsm->context.data_rssi != GSM_RSSI_INVALID &&
-			gsm->context.data_rssi < GSM_RSSI_MAXVAL)) {
-
-			LOG_DBG("Not valid RSSI, %s", "retrying...");
-			if (gsm->rssi_retries-- > 0) {
-				(void)k_work_reschedule(&gsm->gsm_configure_work,
-							K_MSEC(GSM_RSSI_RETRY_DELAY_MSEC));
-				return;
-			}
+	/* Wait until we are registered to an operator */
+	if (gsm->context.data_operator == 0) {
+		LOG_INF("Not registered to operator, %s", "retrying...");
+		if (gsm->register_retries-- > 0) {
+			(void)k_work_reschedule(&gsm->gsm_configure_work,
+						K_MSEC(GSM_REGISTER_RETRY_DELAY_MSEC));
+			return;
 		}
-#if defined(CONFIG_MODEM_CELL_INFO)
-		(void) gsm_setup_cellinfo(gsm);
-		(void) gsm_query_cellinfo(gsm);
-#endif
 	}
 
 	LOG_DBG("modem setup returned %d, %s", ret, "enable PPP");
@@ -763,9 +741,6 @@ attaching:
 					DLCI_AT, gsm->at_dev->name);
 			}
 		}
-#if defined(CONFIG_MODEM_CELL_INFO)
-		(void) gsm_setup_cellinfo(gsm);
-#endif
 		modem_cmd_handler_tx_unlock(&gsm->context.cmd_handler);
 		k_work_schedule(&rssi_work_handle, K_SECONDS(CONFIG_MODEM_GSM_RSSI_POLLING_PERIOD));
 	}

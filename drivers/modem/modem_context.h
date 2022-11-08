@@ -66,8 +66,8 @@ struct modem_context {
 	char *data_imsi;
 	char *data_iccid;
 #endif
-#if defined(CONFIG_MODEM_CELL_INFO)
 	int   data_operator;
+#if defined(CONFIG_MODEM_CELL_INFO)
 	int   data_lac;
 	int   data_cellid;
 #endif
