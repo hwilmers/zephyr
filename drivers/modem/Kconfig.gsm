@@ -29,6 +29,12 @@ config MODEM_GSM_SIMCOM
 
 endchoice
 
+config MODEM_GSM_CONFIG
+	bool "Make modem config available to the app"
+	default n
+	help
+	  Give the app a possibility to change the modem configuration
+
 config MODEM_GSM_UART_NAME
 	string "UART device name the modem is connected to"
 

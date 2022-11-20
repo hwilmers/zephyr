@@ -36,6 +36,10 @@ LOG_MODULE_REGISTER(net_ppp, LOG_LEVEL);
 #include "../../subsys/net/ip/net_stats.h"
 #include "../../subsys/net/ip/net_private.h"
 
+#if defined(CONFIG_MODEM_GSM_CONFIG)
+#include <drivers/gsm_ppp.h>
+#endif
+
 #define UART_BUF_LEN CONFIG_NET_PPP_UART_BUF_LEN
 
 enum ppp_driver_state {
@@ -862,7 +866,11 @@ static int ppp_start(const struct device *dev)
 
 		dev_name = mux->name;
 #elif IS_ENABLED(CONFIG_MODEM_GSM_PPP)
+#if defined(CONFIG_MODEM_GSM_CONFIG)
+		dev_name = gsm_config.uart_name;
+#else
 		dev_name = CONFIG_MODEM_GSM_UART_NAME;
+#endif
 #else
 		dev_name = CONFIG_NET_PPP_UART_NAME;
 #endif

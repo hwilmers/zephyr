@@ -15,4 +15,12 @@ void gsm_ppp_start(const struct device *dev);
 void gsm_ppp_stop(const struct device *dev);
 /** @endcond */
 
+#if defined(CONFIG_MODEM_GSM_CONFIG)
+struct modem_gsm_config {
+	const char *uart_name;
+	const char *apn;
+};
+extern struct modem_gsm_config gsm_config;
+#endif
+
 #endif /* GSM_PPP_H_ */

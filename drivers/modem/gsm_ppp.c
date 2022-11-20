@@ -38,6 +38,8 @@ LOG_MODULE_REGISTER(modem_gsm, CONFIG_MODEM_LOG_LEVEL);
 #define GSM_RSSI_INVALID                -1000
 #define GSM_RSSI_TIMEOUT                K_SECONDS(10)
 
+#define MDM_APN_LENGTH 32
+
 #if defined(CONFIG_MODEM_GSM_ENABLE_CESQ_RSSI)
 	#define GSM_RSSI_MAXVAL          0
 #else
@@ -86,6 +88,13 @@ static struct gsm_modem {
 	bool setup_done : 1;
 	bool attached : 1;
 } gsm;
+
+#if defined(CONFIG_MODEM_GSM_CONFIG)
+struct modem_gsm_config gsm_config = {
+				      CONFIG_MODEM_GSM_UART_NAME,
+				      CONFIG_MODEM_GSM_APN,
+};
+#endif
 
 NET_BUF_POOL_DEFINE(gsm_recv_pool, GSM_RECV_MAX_BUF, GSM_RECV_BUF_SIZE,
 		    0, NULL);
@@ -305,6 +314,9 @@ MODEM_CMD_DEFINE(on_cmd_atcmdinfo_iccid)
 			memmove(minfo.mdm_iccid, p+1, len+1);
 		}
 	}
+	if (strstr(minfo.mdm_iccid, "ERROR")) {
+		minfo.mdm_iccid[0] = '\0';
+	}
 	LOG_INF("ICCID: %s", log_strdup(minfo.mdm_iccid));
 
 	return 0;
@@ -417,6 +429,14 @@ static const struct setup_cmd query_rssi_operator_info_cmds[] = {
 #endif
 	SETUP_CMD("AT+COPS?", "", on_cmd_atcmdinfo_cops, 3U, ","),
 };
+
+# if defined(CONFIG_MODEM_SIM_NUMBERS)
+static const struct setup_cmd query_sim_info_cmds[] = {
+	SETUP_CMD("AT+CIMI", "", on_cmd_atcmdinfo_imsi, 0U, ""),
+	SETUP_CMD("AT+CCID", "", on_cmd_atcmdinfo_iccid, 0U, ""),
+};
+# endif
+
 static const struct setup_cmd setup_cmds[] = {
 	/* no echo */
 	SETUP_CMD_NOHANDLE("ATE0"),
@@ -424,25 +444,22 @@ static const struct setup_cmd setup_cmds[] = {
 	SETUP_CMD_NOHANDLE("ATH"),
 	/* extender errors in numeric form */
 	SETUP_CMD_NOHANDLE("AT+CMEE=1"),
-
 #if defined(CONFIG_MODEM_SHELL)
 	/* query modem info */
 	SETUP_CMD("AT+CGMI", "", on_cmd_atcmdinfo_manufacturer, 0U, ""),
 	SETUP_CMD("AT+CGMM", "", on_cmd_atcmdinfo_model, 0U, ""),
 	SETUP_CMD("AT+CGMR", "", on_cmd_atcmdinfo_revision, 0U, ""),
-# if defined(CONFIG_MODEM_SIM_NUMBERS)
-	SETUP_CMD("AT+CIMI", "", on_cmd_atcmdinfo_imsi, 0U, ""),
-	SETUP_CMD("AT+CCID", "", on_cmd_atcmdinfo_iccid, 0U, ""),
-# endif
 	SETUP_CMD("AT+CGSN", "", on_cmd_atcmdinfo_imei, 0U, ""),
 #endif
-
 	/* disable unsolicited network registration codes */
 	SETUP_CMD_NOHANDLE("AT+CREG=0"),
 
+#if !defined(CONFIG_MODEM_GSM_CONFIG)
 	/* create PDP context */
 	SETUP_CMD_NOHANDLE("AT+CGDCONT=1,\"IP\",\"" CONFIG_MODEM_GSM_APN "\""),
+#endif
 };
+
 
 MODEM_CMD_DEFINE(on_cmd_atcmdinfo_attached)
 {
@@ -648,6 +665,37 @@ static void gsm_finalize_connection(struct gsm_modem *gsm)
 		(void)k_work_reschedule(&gsm->gsm_configure_work, K_SECONDS(1));
 		return;
 	}
+#if defined(CONFIG_MODEM_GSM_CONFIG)
+	/* set APN from config */
+	char cmd[sizeof("AT+CGDCONT=1,\"IP\",\"\"")+MDM_APN_LENGTH];
+
+	snprintf(cmd, sizeof(cmd), "AT+CGDCONT=1,\"IP\",\"%s\"", gsm_config.apn);
+
+	/* setup PDP context definition */
+	ret = modem_cmd_send_nolock(&gsm->context.iface,
+				    &gsm->context.cmd_handler,
+				    &response_cmds[0],
+				    ARRAY_SIZE(response_cmds),
+				    (const char *)cmd,
+				    &gsm->sem_response,
+				    GSM_CMD_SETUP_TIMEOUT);
+	if (ret < 0) {
+		LOG_DBG("modem PDP context setup returned %d, %s",
+			ret, "retrying...");
+		(void)k_work_reschedule(&gsm->gsm_configure_work, K_SECONDS(1));
+		return;
+	}
+#endif
+	ret = modem_cmd_handler_setup_cmds_nolock(&gsm->context.iface,
+						  &gsm->context.cmd_handler,
+						  query_sim_info_cmds,
+						  ARRAY_SIZE(query_sim_info_cmds),
+						  &gsm->sem_response,
+						  GSM_CMD_SETUP_TIMEOUT);
+	if (ret < 0) {
+		LOG_DBG("modem query for sim info returned %d, %s",
+			ret, "ignoring...");
+	}
 
 attaching:
 	/* Don't initialize PPP until we're attached to packet service */
@@ -841,7 +889,11 @@ static void mux_setup(struct k_work *work)
 {
 	struct gsm_modem *gsm = CONTAINER_OF(work, struct gsm_modem,
 					     gsm_configure_work);
+#if defined(CONFIG_MODEM_GSM_CONFIG)
+	const struct device *uart = device_get_binding(gsm_config.uart_name);
+#else
 	const struct device *uart = device_get_binding(CONFIG_MODEM_GSM_UART_NAME);
+#endif
 	int ret;
 
 	/* We need to call this to reactivate mux ISR. Note: This is only called
@@ -999,8 +1051,13 @@ void gsm_ppp_start(const struct device *dev)
 	struct gsm_modem *gsm = dev->data;
 
 	/* Re-init underlying UART comms */
+#if defined(CONFIG_MODEM_GSM_CONFIG)
+	int r = modem_iface_uart_init_dev(&gsm->context.iface,
+					  device_get_binding(gsm_config.uart_name));
+#else
 	int r = modem_iface_uart_init_dev(&gsm->context.iface,
 				device_get_binding(CONFIG_MODEM_GSM_UART_NAME));
+#endif
 	if (r) {
 		LOG_ERR("modem_iface_uart_init returned %d", r);
 		return;
@@ -1034,6 +1091,8 @@ void gsm_ppp_stop(const struct device *dev)
 				      K_SECONDS(10))) {
 		LOG_WRN("Failed locking modem cmds!");
 	}
+
+	(void)k_work_cancel_delayable(&gsm->gsm_configure_work);
 }
 
 static int gsm_init(const struct device *dev)
@@ -1076,8 +1135,13 @@ static int gsm_init(const struct device *dev)
 	gsm->gsm_data.rx_rb_buf = &gsm->gsm_rx_rb_buf[0];
 	gsm->gsm_data.rx_rb_buf_len = sizeof(gsm->gsm_rx_rb_buf);
 
+#if defined(CONFIG_MODEM_GSM_CONFIG)
 	r = modem_iface_uart_init(&gsm->context.iface, &gsm->gsm_data,
-				device_get_binding(CONFIG_MODEM_GSM_UART_NAME));
+				  device_get_binding(gsm_config.uart_name));
+#else
+	r = modem_iface_uart_init(&gsm->context.iface, &gsm->gsm_data,
+				  device_get_binding(CONFIG_MODEM_GSM_UART_NAME));
+#endif
 	if (r < 0) {
 		LOG_DBG("iface uart error %d", r);
 		return r;
