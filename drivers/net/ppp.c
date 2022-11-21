@@ -208,7 +208,11 @@ static int ppp_send_flush(struct ppp_driver_context *ppp, int off)
 	 * But we can safely call uart_fifo_fill outside of ISR context when
 	 * muxing because uart_mux implements it in software.
 	 */
+#if defined(CONFIG_MODEM_GSM_CONFIG)
+	if (IS_ENABLED(CONFIG_GSM_MUX) && gsm_config.use_mux) {
+#else
 	if (IS_ENABLED(CONFIG_GSM_MUX)) {
+#endif
 		(void)uart_fifo_fill(ppp->dev, buf, off);
 	} else {
 		while (off--) {
@@ -854,6 +858,22 @@ static int ppp_start(const struct device *dev)
 		 * configuration is enabled, and use that. If none are enabled,
 		 * then use our own config.
 		 */
+#if defined(CONFIG_MODEM_GSM_CONFIG)
+		if (gsm_config.use_mux) {
+			const struct device *mux;
+
+			mux = uart_mux_find(CONFIG_GSM_MUX_DLCI_PPP);
+			if (!mux) {
+				LOG_ERR("Cannot find GSM mux dev for DLCI %d",
+					CONFIG_GSM_MUX_DLCI_PPP);
+				return -ENOENT;
+			}
+
+			dev_name = mux->name;
+		} else {
+			dev_name = gsm_config.uart_name;
+		}
+#else
 #if IS_ENABLED(CONFIG_GSM_MUX)
 		const struct device *mux;
 
@@ -873,6 +893,7 @@ static int ppp_start(const struct device *dev)
 #endif
 #else
 		dev_name = CONFIG_NET_PPP_UART_NAME;
+#endif
 #endif
 		if (dev_name == NULL || dev_name[0] == '\0') {
 			LOG_ERR("UART configuration is wrong!");

@@ -93,6 +93,9 @@ static struct gsm_modem {
 struct modem_gsm_config gsm_config = {
 				      CONFIG_MODEM_GSM_UART_NAME,
 				      CONFIG_MODEM_GSM_APN,
+#if defined(CONFIG_GSM_MUX)
+				      true,
+#endif
 };
 #endif
 
@@ -440,6 +443,10 @@ static const struct setup_cmd query_sim_info_cmds[] = {
 static const struct setup_cmd setup_cmds[] = {
 	/* no echo */
 	SETUP_CMD_NOHANDLE("ATE0"),
+#if defined(CONFIG_MODEM_GSM_FLOWCONTROL_OFF)
+	/* disable flow control */
+	SETUP_CMD_NOHANDLE("AT&K0"),
+#endif
 	/* hang up */
 	SETUP_CMD_NOHANDLE("ATH"),
 	/* extender errors in numeric form */
@@ -999,7 +1006,6 @@ static void gsm_configure(struct k_work *work)
 	int ret = -1;
 
 	LOG_DBG("Starting modem %p configuration", gsm);
-
 	ret = modem_cmd_send_nolock(&gsm->context.iface,
 				    &gsm->context.cmd_handler,
 				    &response_cmds[0],
@@ -1013,8 +1019,10 @@ static void gsm_configure(struct k_work *work)
 
 		return;
 	}
-
 	if (IS_ENABLED(CONFIG_GSM_MUX) && ret == 0 &&
+#if defined(CONFIG_MODEM_GSM_CONFIG)
+	    gsm_config.use_mux &&
+#endif
 	    gsm->mux_enabled == false) {
 		gsm->mux_setup_done = false;
 
@@ -1067,7 +1075,13 @@ void gsm_ppp_start(const struct device *dev)
 	(void)k_work_reschedule(&gsm->gsm_configure_work, K_NO_WAIT);
 
 #if defined(CONFIG_GSM_MUX)
-	k_work_init_delayable(&rssi_work_handle, rssi_handler);
+#if defined(CONFIG_MODEM_GSM_CONFIG)
+	if (gsm_config.use_mux) {
+#endif
+		k_work_init_delayable(&rssi_work_handle, rssi_handler);
+#if defined(CONFIG_MODEM_GSM_CONFIG)
+	}
+#endif
 #endif
 }
 
@@ -1078,7 +1092,7 @@ void gsm_ppp_stop(const struct device *dev)
 
 	net_if_l2(iface)->enable(iface, false);
 
-	if (IS_ENABLED(CONFIG_GSM_MUX)) {
+	if (IS_ENABLED(CONFIG_GSM_MUX) && gsm->mux_enabled) {
 		/* Lower mux_enabled flag to trigger re-sending AT+CMUX etc */
 		gsm->mux_enabled = false;
 

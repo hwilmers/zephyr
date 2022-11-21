@@ -19,6 +19,9 @@ void gsm_ppp_stop(const struct device *dev);
 struct modem_gsm_config {
 	const char *uart_name;
 	const char *apn;
+#if defined(CONFIG_GSM_MUX)
+	bool use_mux;
+#endif
 };
 extern struct modem_gsm_config gsm_config;
 #endif
