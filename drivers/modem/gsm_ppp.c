@@ -445,7 +445,7 @@ static const struct setup_cmd setup_cmds[] = {
 	SETUP_CMD_NOHANDLE("ATE0"),
 #if defined(CONFIG_MODEM_GSM_FLOWCONTROL_OFF)
 	/* disable flow control */
-	SETUP_CMD_NOHANDLE("AT&K0"),
+	SETUP_CMD_NOHANDLE("AT\Q0"),
 #endif
 	/* hang up */
 	SETUP_CMD_NOHANDLE("ATH"),
