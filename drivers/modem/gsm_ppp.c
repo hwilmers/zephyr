@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020 Intel Corporation
+ * Copyrightf520 (c) 2020 Intel Corporation
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -28,13 +28,16 @@ LOG_MODULE_REGISTER(modem_gsm, CONFIG_MODEM_LOG_LEVEL);
 
 #define GSM_CMD_READ_BUF                128
 #define GSM_CMD_AT_TIMEOUT              K_SECONDS(2)
-#define GSM_CMD_SETUP_TIMEOUT           K_SECONDS(12)
+#define GSM_CMD_SETUP_TIMEOUT           K_SECONDS(6)
+#define GSM_CMD_LOCK_TIMEOUT            K_SECONDS(10)
 #define GSM_RX_STACK_SIZE               CONFIG_MODEM_GSM_RX_STACK_SIZE
 #define GSM_RECV_MAX_BUF                30
 #define GSM_RECV_BUF_SIZE               128
 #define GSM_ATTACH_RETRY_DELAY_MSEC     1000
-#define GSM_REGISTER_RETRY_DELAY_MSEC   1000
+#define GSM_REGISTER_DELAY_MSEC   1000
 #define GSM_REGISTER_RETRIES            120
+#define GSM_RSSI_DELAY_MSEC   1000
+#define GSM_RSSI_RETRIES            120
 #define GSM_RSSI_INVALID                -1000
 #define GSM_RSSI_TIMEOUT                K_SECONDS(10)
 
@@ -45,6 +48,17 @@ LOG_MODULE_REGISTER(modem_gsm, CONFIG_MODEM_LOG_LEVEL);
 #else
 	#define GSM_RSSI_MAXVAL         -51
 #endif
+
+/* Modem network registration state */
+enum network_state {
+	GSM_NET_INIT = -1,
+	GSM_NET_NOT_REGISTERED,
+	GSM_NET_HOME_NETWORK,
+	GSM_NET_SEARCHING,
+	GSM_NET_REGISTRATION_DENIED,
+	GSM_NET_UNKNOWN,
+	GSM_NET_ROAMING,
+};
 
 /* During the modem setup, we first create DLCI control channel and then
  * PPP and AT channels. Currently the modem does not create possible GNSS
@@ -81,7 +95,10 @@ static struct gsm_modem {
 
 	bool modem_attached;
 
+	enum network_state net_state;
+
 	int register_retries;
+	int rssi_retries;
 	int attach_retries;
 	bool mux_enabled : 1;
 	bool mux_setup_done : 1;
@@ -166,12 +183,6 @@ MODEM_CMD_DEFINE(gsm_cmd_error)
 	return 0;
 }
 
-static const struct modem_cmd response_cmds[] = {
-	MODEM_CMD("OK", gsm_cmd_ok, 0U, ""),
-	MODEM_CMD("ERROR", gsm_cmd_error, 0U, ""),
-	MODEM_CMD("CONNECT", gsm_cmd_ok, 0U, ""),
-};
-
 static int unquoted_atoi(const char *s, int base)
 {
 	if (*s == '"') {
@@ -186,11 +197,13 @@ static int unquoted_atoi(const char *s, int base)
  */
 MODEM_CMD_DEFINE(on_cmd_atcmdinfo_cops)
 {
-	if (argc >= 3) {
+	if (argc >= 1) {
 #if defined(CONFIG_MODEM_CELL_INFO)
-		gsm.context.data_operator = unquoted_atoi(argv[2], 10);
-		LOG_INF("operator: %u",
-			gsm.context.data_operator);
+		if (argc >= 3) {
+			gsm.context.data_operator = unquoted_atoi(argv[2], 10);
+			LOG_INF("operator: %u",
+				gsm.context.data_operator);
+		}
 #endif
 		if (unquoted_atoi(argv[0], 10) == 0) {
 			gsm.context.is_automatic_oper = true;
@@ -327,6 +340,36 @@ MODEM_CMD_DEFINE(on_cmd_atcmdinfo_iccid)
 #endif /* CONFIG_MODEM_SIM_NUMBERS */
 #endif /* CONFIG_MODEM_INFO */
 
+MODEM_CMD_DEFINE(on_cmd_net_reg_sts)
+{
+	gsm.net_state = (enum network_state)atoi(argv[1]);
+
+	switch (gsm.net_state) {
+	case GSM_NET_NOT_REGISTERED:
+		LOG_INF("Network %s.", "not registered");
+		break;
+	case GSM_NET_HOME_NETWORK:
+		LOG_INF("Network %s.", "registered, home network");
+		break;
+	case GSM_NET_SEARCHING:
+		LOG_INF("Searching for network...");
+		break;
+	case GSM_NET_REGISTRATION_DENIED:
+		LOG_INF("Network %s.", "registration denied");
+		break;
+	case GSM_NET_UNKNOWN:
+		LOG_INF("Network %s.", "unknown");
+		break;
+	case GSM_NET_ROAMING:
+		LOG_INF("Network %s.", "registered, roaming");
+		break;
+	default:
+		break;
+	}
+
+	return 0;
+}
+
 #if defined(CONFIG_MODEM_CELL_INFO)
 /*
  * Handler: +CEREG: <n>[0],<stat>[1],<tac>[2],<ci>[3],<AcT>[4]
@@ -355,7 +398,6 @@ static const struct setup_cmd setup_operator_info_cmds[] = {
 static int gsm_setup_operator_info(struct gsm_modem *gsm)
 {
 	int ret = 0;
-
 	ret = modem_cmd_handler_setup_cmds_nolock(&gsm->context.iface,
 						  &gsm->context.cmd_handler,
 						  setup_operator_info_cmds,
@@ -411,11 +453,14 @@ MODEM_CMD_DEFINE(on_cmd_atcmdinfo_rssi_csq)
 			rssi = GSM_RSSI_INVALID;
 		}
 
+		/* Hack to avoid invalid RSSI from u-blox Sara R4 */
+		if (gsm.context.data_rssi == 0 && rssi == GSM_RSSI_MAXVAL) {
+			rssi = 0;
+		}
+
 		gsm.context.data_rssi = rssi;
 		LOG_INF("RSSI: %d", rssi);
 	}
-
-	k_sem_give(&gsm.sem_response);
 
 	return 0;
 }
@@ -423,14 +468,14 @@ MODEM_CMD_DEFINE(on_cmd_atcmdinfo_rssi_csq)
 
 static const struct setup_cmd query_rssi_operator_info_cmds[] = {
 #if defined(CONFIG_MODEM_GSM_ENABLE_CESQ_RSSI)
-	SETUP_CMD("AT+CESQ", "+CESQ:", on_cmd_atcmdinfo_rssi_cesq, 6U, ","),
+	SETUP_CMD("AT+CESQ", "", on_cmd_atcmdinfo_rssi_cesq, 6U, ","),
 #else
-	SETUP_CMD("AT+CSQ", "+CSQ:", on_cmd_atcmdinfo_rssi_csq, 2U, ","),
+	SETUP_CMD("AT+CSQ", "", on_cmd_atcmdinfo_rssi_csq, 2U, ","),
 #endif
 #if defined(CONFIG_MODEM_CELL_INFO)
-	SETUP_CMD("AT+CEREG?", "", on_cmd_atcmdinfo_cereg, 5U, ","),
+	SETUP_CMD("AT+CEREG?", "", on_cmd_atcmdinfo_cereg, 1U, ","),
 #endif
-	SETUP_CMD("AT+COPS?", "", on_cmd_atcmdinfo_cops, 3U, ","),
+	SETUP_CMD("AT+COPS?", "", on_cmd_atcmdinfo_cops, 1U, ","),
 };
 
 # if defined(CONFIG_MODEM_SIM_NUMBERS)
@@ -480,14 +525,15 @@ MODEM_CMD_DEFINE(on_cmd_atcmdinfo_attached)
 	}
 
 	modem_cmd_handler_set_error(data, error);
-	k_sem_give(&gsm.sem_response);
 
 	return 0;
 }
 
-
 static const struct modem_cmd read_cops_cmd =
-	MODEM_CMD("+COPS", on_cmd_atcmdinfo_cops, 3U, ",");
+	MODEM_CMD_ARGS_MAX("+COPS:", on_cmd_atcmdinfo_cops, 1U, 4U, ",");
+
+static const struct modem_cmd check_net_reg_cmd =
+	MODEM_CMD("+CEREG:", on_cmd_net_reg_sts, 2U, ",");
 
 static const struct modem_cmd check_attached_cmd =
 	MODEM_CMD("+CGATT:", on_cmd_atcmdinfo_attached, 1U, ",");
@@ -495,6 +541,12 @@ static const struct modem_cmd check_attached_cmd =
 static const struct setup_cmd connect_cmds[] = {
 	/* connect to network */
 	SETUP_CMD_NOHANDLE("ATD*99#"),
+};
+
+static const struct modem_cmd response_cmds[] = {
+	MODEM_CMD("OK", gsm_cmd_ok, 0U, ""),
+	MODEM_CMD("ERROR", gsm_cmd_error, 0U, ""),
+	MODEM_CMD("CONNECT", gsm_cmd_ok, 0U, ""),
 };
 
 static int gsm_setup_mccmno(struct gsm_modem *gsm)
@@ -512,14 +564,14 @@ static int gsm_setup_mccmno(struct gsm_modem *gsm)
 					    &gsm->sem_response,
 					    GSM_CMD_AT_TIMEOUT);
 	} else {
-
 /* First AT+COPS? is sent to check if automatic selection for operator
  * is already enabled, if yes we do not send the command AT+COPS= 0,0.
  */
 		ret = modem_cmd_send_nolock(&gsm->context.iface,
 					    &gsm->context.cmd_handler,
 					    &read_cops_cmd,
-					    1, "AT+COPS?",
+					    1,
+					    "AT+COPS?",
 					    &gsm->sem_response,
 					    GSM_CMD_SETUP_TIMEOUT);
 
@@ -540,7 +592,6 @@ static int gsm_setup_mccmno(struct gsm_modem *gsm)
 	if (ret < 0) {
 		LOG_ERR("AT+COPS ret:%d", ret);
 	}
-
 	return ret;
 }
 
@@ -582,7 +633,7 @@ static void rssi_handler(struct k_work *work)
 {
 	int ret;
 
-	if (work) {
+	if (true) {
 		ret = modem_cmd_handler_setup_cmds(&gsm.context.iface,
 							  &gsm.context.cmd_handler,
 							  query_rssi_operator_info_cmds,
@@ -621,6 +672,11 @@ static void gsm_finalize_connection(struct gsm_modem *gsm)
 	/* If attach check failed, we should not redo every setup step */
 	if (gsm->attach_retries) {
 		goto attaching;
+	}
+
+	/* If modem is searching for network, we should skip the setup step */
+	if (gsm->register_retries) {
+		goto registering;
 	}
 
 	if (IS_ENABLED(CONFIG_GSM_MUX) && gsm->mux_enabled) {
@@ -704,6 +760,30 @@ static void gsm_finalize_connection(struct gsm_modem *gsm)
 			ret, "ignoring...");
 	}
 
+ registering:
+	/* Wait for cell tower registration */
+	ret = modem_cmd_send_nolock(&gsm->context.iface,
+				    &gsm->context.cmd_handler,
+				    &check_net_reg_cmd, 1,
+				    "AT+CEREG?",
+				    &gsm->sem_response,
+				    GSM_CMD_SETUP_TIMEOUT);
+	if ((ret < 0) || ((gsm->net_state != GSM_NET_ROAMING) &&
+			 (gsm->net_state != GSM_NET_HOME_NETWORK))) {
+		if (!gsm->register_retries) {
+			gsm->register_retries = CONFIG_MODEM_GSM_REGISTER_TIMEOUT *
+				MSEC_PER_SEC / GSM_REGISTER_DELAY_MSEC;
+		} else {
+			gsm->register_retries--;
+		}
+
+		(void)k_work_reschedule(&gsm->gsm_configure_work,
+					  K_MSEC(GSM_REGISTER_DELAY_MSEC));
+		return;
+	}
+
+	gsm->register_retries = 0;
+
 attaching:
 	/* Don't initialize PPP until we're attached to packet service */
 	ret = modem_cmd_send_nolock(&gsm->context.iface,
@@ -737,7 +817,7 @@ attaching:
 	gsm->attach_retries = 0;
 
 	LOG_DBG("modem attach returned %d, %s", ret, "read RSSI");
-	gsm->register_retries = GSM_REGISTER_RETRIES;
+	gsm->rssi_retries = GSM_RSSI_RETRIES;
 
  attached:
 	/* Read connection quality (RSSI) and operator info before PPP carrier is ON */
@@ -747,9 +827,9 @@ attaching:
 	/* Wait until we are registered to an operator */
 	if (gsm->context.data_operator == 0) {
 		LOG_INF("Not registered to operator, %s", "retrying...");
-		if (gsm->register_retries-- > 0) {
+		if (gsm->rssi_retries-- > 0) {
 			(void)k_work_reschedule(&gsm->gsm_configure_work,
-						K_MSEC(GSM_REGISTER_RETRY_DELAY_MSEC));
+						K_MSEC(GSM_RSSI_DELAY_MSEC));
 			return;
 		}
 	}
@@ -1091,7 +1171,6 @@ void gsm_ppp_stop(const struct device *dev)
 	struct net_if *iface = gsm->iface;
 
 	net_if_l2(iface)->enable(iface, false);
-
 	if (IS_ENABLED(CONFIG_GSM_MUX) && gsm->mux_enabled) {
 		/* Lower mux_enabled flag to trigger re-sending AT+CMUX etc */
 		gsm->mux_enabled = false;
@@ -1102,11 +1181,13 @@ void gsm_ppp_stop(const struct device *dev)
 	}
 
 	if (modem_cmd_handler_tx_lock(&gsm->context.cmd_handler,
-				      K_SECONDS(10))) {
+				      GSM_CMD_LOCK_TIMEOUT)) {
 		LOG_WRN("Failed locking modem cmds!");
 	}
 
 	(void)k_work_cancel_delayable(&gsm->gsm_configure_work);
+
+	gsm->net_state = GSM_NET_INIT;
 }
 
 static int gsm_init(const struct device *dev)
