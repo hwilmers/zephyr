@@ -70,6 +70,7 @@ struct modem_context {
 #if defined(CONFIG_MODEM_CELL_INFO)
 	int   data_lac;
 	int   data_cellid;
+	int   data_act;
 #endif
 	int   data_rssi;
 	bool  is_automatic_oper;
