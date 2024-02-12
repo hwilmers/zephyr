@@ -412,9 +412,9 @@ MODEM_CMD_DEFINE(on_cmd_atcmdinfo_cereg)
 
 static const struct setup_cmd query_cellinfo_cmds[] = {
 	SETUP_CMD_NOHANDLE("AT+CEREG=2"),
-	SETUP_CMD("AT+CEREG?", "", on_cmd_atcmdinfo_cereg, 5U, ","),
+	SETUP_CMD("AT+CEREG?", "+CEREG:", on_cmd_atcmdinfo_cereg, 5U, ","),
 	SETUP_CMD_NOHANDLE("AT+COPS=3,2"),
-	SETUP_CMD("AT+COPS?", "", on_cmd_atcmdinfo_cops, 3U, ","),
+	SETUP_CMD("AT+COPS?", "+COPS:", on_cmd_atcmdinfo_cops, 3U, ","),
 };
 
 static int gsm_query_cellinfo(struct gsm_modem *gsm)
@@ -573,7 +573,9 @@ static int gsm_query_modem_info(struct gsm_modem *gsm)
 						  GSM_CMD_SETUP_TIMEOUT);
 
 	if (ret < 0) {
-		return ret;
+		if (gsm->minfo.mdm_imei == '\0') {
+			return ret;
+		}
 	}
 
 	gsm->modem_info_queried = true;
@@ -718,7 +720,11 @@ static void gsm_finalize_connection(struct k_work *work)
 		goto registering;
 	}
 
+#if defined(CONFIG_MODEM_GSM_CONFIG)
+	if (IS_ENABLED(CONFIG_GSM_MUX) && gsm_config.use_mux) {
+#else
 	if (IS_ENABLED(CONFIG_GSM_MUX)) {
+#endif
 		ret = modem_cmd_send_nolock(&gsm->context.iface,
 					    &gsm->context.cmd_handler,
 					    &response_cmds[0],
@@ -848,9 +854,13 @@ attaching:
 	gsm->state = GSM_PPP_ATTACHED;
 	gsm->retries = GSM_RSSI_RETRIES;
 
- attached:
+attached:
 
+#if defined(CONFIG_MODEM_GSM_CONFIG)
+	if (!IS_ENABLED(CONFIG_GSM_MUX) || gsm_config.use_mux == false) {
+#else
 	if (!IS_ENABLED(CONFIG_GSM_MUX)) {
+#endif
 		/* Read connection quality (RSSI) before PPP carrier is ON */
 		query_rssi_nolock(gsm);
 
@@ -1157,7 +1167,11 @@ wait_at:
 	}
 	gsm->state = GSM_PPP_AT_RDY;
 
+#if defined(CONFIG_MODEM_GSM_CONFIG)
+	if (IS_ENABLED(CONFIG_GSM_MUX) && gsm_config.use_mux) {
+#else
 	if (IS_ENABLED(CONFIG_GSM_MUX)) {
+#endif
 		if (mux_enable(gsm) == 0) {
 			LOG_DBG("GSM muxing %s", "enabled");
 		} else {
